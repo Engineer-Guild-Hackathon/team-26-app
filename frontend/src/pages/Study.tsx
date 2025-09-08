@@ -15,15 +15,32 @@ export default function Study() {
   const captureWebcamPhoto = (): Promise<string> => {
     return new Promise((resolve) => {
       if (videoRef.current) {
-        const canvas = document.createElement('canvas')
         const video = videoRef.current
+        
+        // ビデオが準備できているかチェック
+        if (video.videoWidth === 0 || video.videoHeight === 0) {
+          console.warn('Webカメラのビデオサイズが0です')
+          resolve('data:,') // 空のデータURL
+          return
+        }
+        
+        const canvas = document.createElement('canvas')
         canvas.width = video.videoWidth
         canvas.height = video.videoHeight
         const ctx = canvas.getContext('2d')
+        
         if (ctx) {
           ctx.drawImage(video, 0, 0)
-          resolve(canvas.toDataURL('image/jpeg', 0.8))
+          const dataURL = canvas.toDataURL('image/jpeg', 0.8)
+          console.log('Webカメラ撮影成功:', { width: canvas.width, height: canvas.height, dataLength: dataURL.length })
+          resolve(dataURL)
+        } else {
+          console.error('Canvas context取得失敗')
+          resolve('data:,')
         }
+      } else {
+        console.error('videoRef.currentがnullです')
+        resolve('data:,')
       }
     })
   }

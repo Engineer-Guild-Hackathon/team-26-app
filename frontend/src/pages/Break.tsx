@@ -2,82 +2,497 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import TalkAnimation from '../components/TalkAnimation'
 
-// OpenAI Realtime API接続クラス
-class OpenAIRealtimeClient {
-  private ws: WebSocket | null = null
-  private apiKey: string
+// CSS animations for speaking indicator
+const styles = `
+  @keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.3; }
+    100% { opacity: 1; }
+  }
+`
+
+// Inject styles into head
+if (typeof document !== 'undefined') {
+  const styleElement = document.createElement('style')
+  styleElement.textContent = styles
+  document.head.appendChild(styleElement)
+}
+
+// WebRTC Realtime AI Client
+class WebRTCRealtimeClient {
+  private pc: RTCPeerConnection | null = null
+  private dataChannel: RTCDataChannel | null = null
+  private mediaStream: MediaStream | null = null
   private onMessage: (message: any) => void
   private onAudioResponse: (audioData: string) => void
+  private breakId: string
+  private isSending: boolean = false // 送信状態管理
+  private isResponseActive: boolean = false // レスポンス状態管理
 
-  constructor(apiKey: string, onMessage: (message: any) => void, onAudioResponse: (audioData: string) => void) {
-    this.apiKey = apiKey
+  constructor(breakId: string, onMessage: (message: any) => void, _onAudioResponse: (audioData: string) => void) {
+    this.breakId = breakId
     this.onMessage = onMessage
-    this.onAudioResponse = onAudioResponse
+    this.onAudioResponse = _onAudioResponse
   }
 
-  connect() {
-    if (!this.apiKey || this.apiKey === 'your-openai-api-key-here') {
-      console.error('OpenAI APIキーが設定されていません')
-      this.onMessage({ type: 'error', message: 'APIキーが設定されていません。' })
+  async connect() {
+    try {
+      console.log('WebRTC接続開始...')
+      
+      // 1. ephemeral keyを取得
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const sessionResp = await fetch(`${apiUrl}/session/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      })
+      
+      if (!sessionResp.ok) {
+        throw new Error('セッション作成に失敗しました')
+      }
+      
+      const sessionData = await sessionResp.json()
+      console.log('Session created:', sessionData)
+
+      // 2. RTCPeerConnection作成
+      this.pc = new RTCPeerConnection()
+
+      // 3. マイク音声を取得
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 24000
+        }
+      })
+      
+      this.mediaStream.getTracks().forEach((track) => {
+        this.pc!.addTrack(track, this.mediaStream!)
+      })
+
+      // 4. データチャンネル作成
+      this.dataChannel = this.pc.createDataChannel("oai-events")
+      this.setupDataChannelEvents()
+
+      // 5. WebRTCイベント設定
+      this.pc.addEventListener("track", (event) => {
+        console.log("Received track:", event.track.kind)
+        if (event.track.kind === "audio") {
+          const audio = new Audio()
+          audio.srcObject = event.streams[0]
+          audio.play()
+        }
+      })
+
+      // 6. Offer作成・送信
+      const offer = await this.pc.createOffer()
+      await this.pc.setLocalDescription(offer)
+
+      const sdpResp = await fetch(`https://api.openai.com/v1/realtime?model=gpt-realtime`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${sessionData.client_secret.value}`,
+          "Content-Type": "application/sdp",
+        },
+        body: offer.sdp,
+      })
+
+      if (!sdpResp.ok) {
+        throw new Error("SDP answer取得に失敗しました")
+      }
+
+      const answerSdp = await sdpResp.text()
+      await this.pc.setRemoteDescription({ type: "answer", sdp: answerSdp })
+
+      this.onMessage({ 
+        type: 'connected', 
+        message: 'WebRTC接続完了！リアルタイム音声会話が開始されました🎤' 
+      })
+
+    } catch (error) {
+      console.error('WebRTC connection error:', error)
+      this.onMessage({ type: 'error', message: `接続エラー: ${error instanceof Error ? error.message : String(error)}` })
+    }
+  }
+
+  private setupDataChannelEvents() {
+    if (!this.dataChannel) return
+
+    this.dataChannel.addEventListener("open", () => {
+      console.log("Data channel opened")
+      
+      // セッション設定（画像対応）
+      const sessionUpdate = {
+        type: "session.update",
+        session: {
+          modalities: ["text", "audio"],
+          turn_detection: {
+            type: "server_vad",
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 500,
+          },
+          voice: "alloy",
+          input_audio_format: "pcm16",
+          output_audio_format: "pcm16",
+          instructions: `あなたは学習支援キャラクターです。学習中の休憩時間に、親しみやすく励ましの言葉をかけてください。
+
+【重要】画像が送信された場合は、必ずその内容を詳細に分析してください：
+- ウェブカメラ画像：学習者の表情、姿勢、疲労度を確認
+- スクリーン画像：学習内容、進捗状況、難易度を把握
+- 具体的で実用的なアドバイスを提供
+
+回答スタイル：
+- 優しく親しみやすい日本語
+- 「どんな感じ？」「それ難しいよね〜」のような自然な話し方
+- 学習者を励ます
+- 短めの返答（2-3文程度）
+- 絵文字を適度に使用`,
+        },
+      }
+      this.dataChannel!.send(JSON.stringify(sessionUpdate))
+
+      // DataChannel接続後に画像分析を実行
+    setTimeout(() => {
+        this.onMessage({ type: 'dataChannel_ready', message: 'DataChannel準備完了' })
+      }, 1000)
+    })
+
+    this.dataChannel.addEventListener("message", (event) => {
+      const data = JSON.parse(event.data)
+      // 重要なメッセージのみログ出力
+      if (data.type.includes('error') || data.type.includes('done') || data.type.includes('created')) {
+        console.log("Data channel message:", data)
+      }
+      
+      this.handleRealtimeMessage(data)
+    })
+
+    this.dataChannel.addEventListener("close", () => {
+      console.warn("Data channel closed")
+    })
+
+    this.dataChannel.addEventListener("error", (error) => {
+      console.error("Data channel error:", error)
+      // エラー時は状態をリセット
+      this.isSending = false
+      this.isResponseActive = false
+      this.onMessage({ 
+        type: 'error', 
+        message: 'DataChannel接続エラーが発生しました。再接続してください。' 
+      })
+    })
+  }
+
+  private handleRealtimeMessage(data: any) {
+    switch (data.type) {
+      case "response.audio.delta":
+        if (data.delta) {
+          console.log("Audio delta received, length:", data.delta.length)
+          this.playAudioDelta(data.delta)
+        }
+        break
+
+      case "response.audio.done":
+        console.log("Audio response done")
+        this.onMessage({ type: 'ai_audio_done', message: '🔊 音声応答完了' })
+        break
+
+      case "response.created":
+        console.log("Response started")
+        this.isResponseActive = true // レスポンス開始
+        this.onMessage({ type: 'ai_response_started', message: '🤖 AI応答開始...' })
+        break
+
+      case "conversation.item.input_audio_transcription.completed":
+        console.log("User transcription:", data.transcript)
+        this.onMessage({ 
+          type: 'user_transcription', 
+          message: `🎤 あなた: ${data.transcript}`,
+          transcript: data.transcript
+        })
+        break
+
+      case "response.text.delta":
+        if (data.delta) {
+          this.onMessage({ 
+            type: 'ai_text_delta', 
+            content: data.delta 
+          })
+        }
+        break
+
+      case "response.text.done":
+        console.log("Text response done:", data.text)
+        this.onMessage({ 
+          type: 'ai_text_done', 
+          message: `🤖 キャラクター: ${data.text}` 
+        })
+        break
+
+      case "response.done":
+        console.log("Response completed")
+        this.isResponseActive = false // レスポンス完了
+        this.isSending = false // 送信状態もリセット
+        
+        if (data.response && data.response.status === 'failed') {
+          console.error("🚨 Response failed:", data.response.status_details)
+          this.onMessage({ 
+            type: 'error', 
+            message: `❌ AI応答エラー: ${data.response.status_details?.error?.message || 'Unknown error'}` 
+          })
+        } else {
+          this.onMessage({ type: 'ai_response_done', message: '✅ 応答完了' })
+        }
+        break
+
+      case "error":
+        console.error("OpenAI API error:", data.error)
+        this.onMessage({ type: 'error', message: `⚠️ エラー: ${data.error.message}` })
+        break
+    }
+  }
+
+  private playAudioDelta(delta: string) {
+    try {
+      const audioData = atob(delta)
+      const audioArray = new Uint8Array(audioData.length)
+      for (let i = 0; i < audioData.length; i++) {
+        audioArray[i] = audioData.charCodeAt(i)
+      }
+      this.playAudio(audioArray.buffer)
+    } catch (error) {
+      console.error('Audio playback error:', error)
+    }
+  }
+
+  private playAudio(audioBuffer: ArrayBuffer) {
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+    audioContext.decodeAudioData(audioBuffer, (decodedData) => {
+      const source = audioContext.createBufferSource()
+      source.buffer = decodedData
+      source.connect(audioContext.destination)
+      source.start()
+    }).catch(console.error)
+  }
+
+  // 画像圧縮関数（実際の画像処理版）
+  private compressImage(dataUrl: string, maxSizeKB: number = 100): string {
+    try {
+      const originalSizeKB = (dataUrl.length * 0.75) / 1024
+      console.log(`元画像: ${originalSizeKB.toFixed(2)}KB (目標: ${maxSizeKB}KB)`)
+      
+      if (originalSizeKB <= maxSizeKB) {
+        return dataUrl
+      }
+      
+      // Imageオブジェクトを使用して実際の画像を処理（同期的に）
+      const img = new Image()
+      img.src = dataUrl
+      
+      const canvas = document.createElement('canvas')
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return dataUrl
+      
+      // 圧縮後のサイズを計算
+      const compressionRatio = Math.sqrt(maxSizeKB / originalSizeKB)
+      const targetWidth = Math.max(100, Math.min(400, img.width * compressionRatio))
+      const targetHeight = Math.max(75, Math.min(300, img.height * compressionRatio))
+      
+      canvas.width = targetWidth
+      canvas.height = targetHeight
+      
+      // 画像が読み込まれていない場合の代替処理
+      if (img.complete && img.naturalWidth > 0) {
+        // 実際の画像を描画
+        ctx.drawImage(img, 0, 0, targetWidth, targetHeight)
+      } else {
+        // 代替として元画像の情報から推定描画
+        ctx.fillStyle = '#f5f5f5'
+        ctx.fillRect(0, 0, targetWidth, targetHeight)
+        ctx.fillStyle = '#ddd'
+        ctx.fillText('Screen Content', 10, targetHeight / 2)
+      }
+      
+      // 品質改善（よりバランスの取れた圧縮）
+      const quality = Math.max(0.3, Math.min(0.7, maxSizeKB / originalSizeKB))
+      const compressed = canvas.toDataURL('image/jpeg', quality)
+      
+      const compressedSizeKB = (compressed.length * 0.75) / 1024
+      console.log(`圧縮後: ${compressedSizeKB.toFixed(2)}KB (品質: ${quality.toFixed(2)})`)
+      
+      return compressed
+      
+    } catch (error) {
+      console.error('画像圧縮エラー:', error)
+      
+      // エラー時は極小サイズの代替画像を作成
+      try {
+        const canvas = document.createElement('canvas')
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          canvas.width = maxSizeKB <= 10 ? 100 : 160
+          canvas.height = maxSizeKB <= 10 ? 75 : 120
+          ctx.fillStyle = '#f0f0f0'
+          ctx.fillRect(0, 0, canvas.width, canvas.height)
+          ctx.fillStyle = '#999'
+          ctx.font = '12px Arial'
+          ctx.fillText('Image Error', 10, canvas.height / 2)
+          return canvas.toDataURL('image/jpeg', 0.1)
+        }
+      } catch {}
+      
+      return dataUrl
+    }
+  }
+
+  // 画像分析（OpenAI Realtime API公式ドキュメント通り）
+  sendImages(webcamPhoto: string, screenPhoto: string, studyContext: any) {
+    if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+      console.error('Data channel not open. State:', this.dataChannel?.readyState)
       return
     }
 
-    // 注意: OpenAI Realtime APIはブラウザから直接接続できません
-    // 本来はバックエンドサーバー経由が必要ですが、開発用にダミー実装
-    console.log('ダミーAI接続を開始（本来はバックエンド経由が必要）')
-    
-    // ダミーの接続成功を模擬
-    setTimeout(() => {
-      if (this.onMessage) {
-        this.onMessage({ type: 'connected', message: 'AI接続完了！画像を見ながらお話しできます✨（ダミー実装）' })
-      }
-    }, 1000)
+    if (this.isSending) {
+      console.warn('既に画像送信中です。重複送信を防止します。')
+      return
+    }
 
-  }
+    if (this.isResponseActive) {
+      console.warn('AI応答中です。応答完了後に再試行してください。')
+      return
+    }
 
-  send(message: any) {
-    // ダミー実装: ログ出力のみ
-    console.log('ダミーAI送信:', message.type)
-  }
-
-  sendImages(webcamPhoto: string, screenPhoto: string) {
-    console.log('ダミー画像分析開始:', { 
+    this.isSending = true
+    console.log('🖼️ 画像分析開始:', { 
       webcamLength: webcamPhoto.length, 
       screenLength: screenPhoto.length 
     })
     
-    // ダミーのAI応答を生成
-    setTimeout(() => {
-      const responses = [
-        'お疲れさまです！勉強頑張ってますね✨ 少し休憩して、水分補給も忘れずに！',
-        'いい感じに集中して勉強されてますね！💪 短い休憩で気分をリフレッシュしましょう。',
-        'ずっと画面を見て大変でしたね😊 目を休めて、深呼吸してみてください！',
-        '真剣に取り組んでいる姿が素晴らしいです！✨ この調子で頑張りましょう♪'
-      ]
-      const randomResponse = responses[Math.floor(Math.random() * responses.length)]
-      this.onMessage({ type: 'ai_response', message: randomResponse })
-    }, 1500)
-  }
+    // 画像サイズをチェック・圧縮（画質改善）
+    const webcamCompressed = this.compressImage(webcamPhoto, 25)  // 画質改善
+    const screenCompressed = this.compressImage(screenPhoto, 35) // 画質改善
 
-  sendAudio(audioData: string) {
-    console.log('ダミー音声分析:', audioData.length)
-    
-    // ダミーの音声応答
+    // 公式ドキュメント通りの形式でテキストメッセージ送信
+    const textMessage = {
+      type: "conversation.item.create",
+      previous_item_id: null,
+      item: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: studyContext?.isInitialConversation ? 
+              "こんにちは！休憩時間ですね✨ 以下の画像から学習状況を確認して、親しみやすく「どんな感じ？」「それ難しいよね〜」のような自然な話し方で声をかけてください。短めに2-3文で。" :
+              studyContext?.isRefreshAnalysis ?
+              "画面を更新しました📱 新しい学習状況を確認して、進捗やアドバイスをお願いします。短めに2-3文で。" :
+              "学習状況を分析して、具体的なアドバイスをください。"
+          }
+        ]
+      }
+    }
+
+    // ウェブカメラ画像送信（公式ドキュメント通り）
+    const webcamMessage = {
+      type: "conversation.item.create",
+      previous_item_id: null,
+      item: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_image",
+            image_url: webcamCompressed
+          }
+        ]
+      }
+    }
+
+    // スクリーン画像送信（公式ドキュメント通り）
+    const screenMessage = {
+      type: "conversation.item.create", 
+      previous_item_id: null,
+      item: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_image",
+            image_url: screenCompressed
+          }
+        ]
+      }
+    }
+
+    // 安全な送信関数
+    const sendSafeMessage = (message: any, label: string): boolean => {
+      if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+        console.warn(`${label}: DataChannel not ready`)
+        return false
+      }
+      
+      const messageStr = JSON.stringify(message)
+      const sizeKB = (messageStr.length * 0.75) / 1024
+      
+      if (sizeKB > 64) { // 制限を緩和（画質改善）
+        console.warn(`${label} 送信スキップ: ${sizeKB.toFixed(2)}KB (制限: 64KB)`)
+        return false
+      }
+      
+      try {
+        this.dataChannel.send(messageStr)
+        console.log(`${label} 送信成功: ${sizeKB.toFixed(2)}KB`)
+        return true
+      } catch (error) {
+        console.error(`${label} 送信エラー:`, error)
+        this.isSending = false // エラー時は状態リセット
+        return false
+      }
+    }
+
+    // 順次送信（エラー対応）
+    sendSafeMessage(textMessage, '📝 テキスト')
+
     setTimeout(() => {
-      const responses = [
-        '音声でお話しいただき、ありがとうございます！😊',
-        '声の調子から、少し疲れているように聞こえますね。大丈夫ですか？',
-        'いい声ですね！リラックスして休憩を楽しんでください♪',
-        '何かお困りのことがあれば、お気軽にお話しくださいね✨'
-      ]
-      const randomResponse = responses[Math.floor(Math.random() * responses.length)]
-      this.onMessage({ type: 'ai_response', message: randomResponse })
-    }, 2000)
+      sendSafeMessage(webcamMessage, '📸 ウェブカメラ')
+    }, 100)
+
+    setTimeout(() => {
+      sendSafeMessage(screenMessage, '🖥️ スクリーン')
+    }, 200)
+
+    // レスポンス生成
+    setTimeout(() => {
+      if (this.dataChannel && this.dataChannel.readyState === 'open') {
+        console.log('🎤 レスポンス生成開始')
+        this.dataChannel.send(JSON.stringify({
+          type: 'response.create',
+          response: { modalities: ['text', 'audio'] }
+        }))
+      }
+      // 送信完了状態をリセット
+      this.isSending = false
+    }, 300)
   }
 
   disconnect() {
-    console.log('ダミーAI接続終了')
-    this.onMessage({ type: 'disconnected', message: 'AI接続が終了しました' })
+    // 状態をリセット
+    this.isSending = false
+    this.isResponseActive = false
+    
+    if (this.dataChannel) {
+      this.dataChannel.close()
+      this.dataChannel = null
+    }
+    if (this.pc) {
+      this.pc.close()
+      this.pc = null
+    }
+    if (this.mediaStream) {
+      this.mediaStream.getTracks().forEach(track => track.stop())
+      this.mediaStream = null
+    }
   }
 }
 
@@ -85,8 +500,7 @@ export default function Break() {
   const navigate = useNavigate()
   const [settings, setSettings] = useState<any>(null)
   const [breakElapsedTime, setBreakElapsedTime] = useState(0)
-  const [isRecording, setIsRecording] = useState(false)
-  const [conversation, setConversation] = useState<string[]>([])
+  const [partialText, setPartialText] = useState('')
   const videoRef = useRef<HTMLVideoElement>(null)
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [capturedImages, setCapturedImages] = useState<{
@@ -95,32 +509,84 @@ export default function Break() {
     timestamp: string
   } | null>(null)
   
-  // OpenAI Realtime API関連
-  const [aiClient, setAiClient] = useState<OpenAIRealtimeClient | null>(null)
+  // WebRTC Realtime AI関連
+  const [aiClient, setAiClient] = useState<WebRTCRealtimeClient | null>(null)
   const [isAiConnected, setIsAiConnected] = useState(false)
-  const [audioRecorder, setAudioRecorder] = useState<MediaRecorder | null>(null)
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const audioChunks = useRef<Blob[]>([])
-  
-  // 環境変数からAPIキーを取得
-  const apiKey = import.meta.env.VITE_OPENAI_API_KEY || 'your-openai-api-key-here'
+  const [isConnecting, setIsConnecting] = useState(false)
+  const [isAISpeaking, setIsAISpeaking] = useState(false)
+  const [breakId, setBreakId] = useState<string>('')
+  const [hasInitialImageSent, setHasInitialImageSent] = useState(false) // 初回送信フラグ
 
   // 休憩時間の計算（学習時間の1/5）
   const breakDuration = settings ? Math.floor(settings.targetTime / 5 * 60) : 300 // デフォルト5分
 
-  // AI応答のメッセージハンドラ
+
+  // AI応答のメッセージハンドラ（WebRTC対応）
   const handleAiMessage = (message: any) => {
     console.log('AI message:', message)
-    if (message.type === 'connected') {
+    
+    switch (message.type) {
+      case 'connected':
       setIsAiConnected(true)
-      setConversation(prev => [...prev, `✨ ${message.message}`])
-    } else if (message.type === 'ai_response') {
-      setConversation(prev => [...prev, `キャラクター: ${message.message}`])
-    } else if (message.type === 'error') {
-      setConversation(prev => [...prev, `⚠️ ${message.message}`])
-    } else if (message.type === 'disconnected') {
+        setIsConnecting(false)
+        break
+        
+      case 'user_transcription':
+        // 文字起こし処理（ログなし）
+        break
+        
+      case 'ai_response_started':
+        setIsAISpeaking(true)
+        break
+        
+      case 'ai_text_delta':
+        setPartialText(prev => prev + message.content)
+        break
+        
+      case 'ai_text_done':
+        setPartialText('')
+        break
+        
+      case 'ai_audio_done':
+        setIsAISpeaking(false)
+        break
+        
+      case 'ai_response_done':
+        setIsAISpeaking(false)
+        break
+        
+      case 'error':
+        setIsConnecting(false)
+        setIsAiConnected(false)
+        break
+        
+      case 'disconnected':
       setIsAiConnected(false)
-      setConversation(prev => [...prev, `❌ ${message.message}`])
+        setIsConnecting(false)
+        break
+
+      case 'dataChannel_ready':
+        // DataChannel準備完了後に画像分析実行
+        if (capturedImages && settings) {
+          console.log('DataChannel準備完了: 自動スクリーンショット分析を実行')
+          // 自動画像分析開始
+          
+          const studyContext = {
+            studyContent: settings.studyContent,
+            elapsedTime: Date.now() - new Date(settings.startTime).getTime(),
+            targetTime: settings.targetTime,
+            pomodoroTime: settings.pomodoroTime,
+            isInitialConversation: true
+          }
+          
+          if (aiClient) {
+            aiClient.sendImages(capturedImages.webcamPhoto, capturedImages.screenPhoto, studyContext)
+          }
+        }
+        break
+        
+      default:
+        console.log('Unhandled message type:', message.type)
     }
   }
 
@@ -145,58 +611,116 @@ export default function Break() {
       setCapturedImages(parsedImages)
       console.log('撮影画像を読み込みました:', parsedImages)
     }
+    
+    // breakIdを生成（タイムスタンプベース）
+    const generatedBreakId = `break_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    setBreakId(generatedBreakId)
   }, [])
 
-  // OpenAI Realtime API接続
-  useEffect(() => {
-    let isMounted = true
+  // WebRTC Realtime AI接続
+  const startConnection = async () => {
+    if (isConnecting || isAiConnected) return
     
-    const client = new OpenAIRealtimeClient(apiKey, handleAiMessage, handleAiAudio)
+    setIsConnecting(true)
+    const client = new WebRTCRealtimeClient(breakId, handleAiMessage, handleAiAudio)
+    setAiClient(client)
     
-    if (isMounted) {
-      setAiClient(client)
-      // 接続開始
-      client.connect()
+    try {
+      await client.connect()
+      
+      // DataChannel接続待ちの処理は削除（DataChannelのopenイベントで実行）
+      
+    } catch (error) {
+      console.error('Connection failed:', error)
+      setIsConnecting(false)
     }
-    
-    return () => {
-      isMounted = false
-      client.disconnect()
+  }
+
+  const stopConnection = () => {
+    if (aiClient) {
+      aiClient.disconnect()
       setAiClient(null)
-      setIsAiConnected(false)
     }
-  }, [apiKey])
+    setIsAiConnected(false)
+    setIsConnecting(false)
+    setIsAISpeaking(false)
+  }
 
-  // 撮影画像が読み込まれたら自動でAIに送信
+  // 初期化時のbreakId生成
   useEffect(() => {
-    if (capturedImages && aiClient && isAiConnected) {
-      console.log('画像をAIに送信中...')
-      setConversation(prev => [...prev, '📸 画像を分析中...'])
-      aiClient.sendImages(capturedImages.webcamPhoto, capturedImages.screenPhoto)
-    }
-  }, [capturedImages, aiClient, isAiConnected])
+    const generatedBreakId = `break_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    setBreakId(generatedBreakId)
+  }, [])
 
-  // Webカメラを開始
+  // 撮影画像が読み込まれたら自動でAIに送信（初回のみ）
+  useEffect(() => {
+    if (capturedImages && aiClient && isAiConnected && settings && !hasInitialImageSent) {
+      console.log('初回画像をAIに送信中...')
+      setHasInitialImageSent(true) // 初回送信済みマーク
+      
+      const studyContext = {
+        studyContent: settings.studyContent,
+        elapsedTime: Date.now() - new Date(settings.startTime).getTime(),
+        targetTime: settings.targetTime,
+        pomodoroTime: settings.pomodoroTime,
+        isInitialConversation: true // 初回フラグ
+      }
+      
+      aiClient.sendImages(capturedImages.webcamPhoto, capturedImages.screenPhoto, studyContext)
+    }
+  }, [capturedImages, aiClient, isAiConnected, settings, hasInitialImageSent])
+
+  // Webカメラと音声を開始
   useEffect(() => {
     const startCamera = async () => {
       try {
+        console.log('メディアデバイスのアクセスを要求中...')
+        
+        // より詳細な音声設定
         const mediaStream = await navigator.mediaDevices.getUserMedia({ 
-          video: true, 
-          audio: true // 音声も必要
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: 'user'
+          }, 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: 48000
+          }
         })
+        
+        console.log('メディアストリーム取得成功:', {
+          videoTracks: mediaStream.getVideoTracks().length,
+          audioTracks: mediaStream.getAudioTracks().length
+        })
+        
         setStream(mediaStream)
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream
         }
+        
+        // 音声トラックの状態を確認
+        const audioTracks = mediaStream.getAudioTracks()
+        if (audioTracks.length > 0) {
+          console.log('音声トラック:', {
+            enabled: audioTracks[0].enabled,
+            readyState: audioTracks[0].readyState,
+            settings: audioTracks[0].getSettings()
+          })
+        } else {
+          console.warn('音声トラックが見つかりません')
+        }
+        
       } catch (error) {
-        console.error('カメラアクセスエラー:', error)
+        console.error('カメラ・音声アクセスエラー:', error)
       }
     }
 
     startCamera()
     
-    // 初期メッセージ
-    setConversation(['キャラクター: お疲れさま！少し休憩しましょう♪'])
+    // 初期メッセージ（ログなし）
 
     return () => {
       if (stream) {
@@ -230,64 +754,120 @@ export default function Break() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
   }
 
-  // 音声録音開始/停止
-  const handleStartRecording = async () => {
-    if (!isRecording && stream) {
-      if (!aiClient || !isAiConnected) {
-        setConversation(prev => [...prev, '⚠️ AI未接続です'])
+  // 画面更新＋再分析処理（新しいスクリーンショットを取得）
+  const handleRefreshAndAnalyze = async () => {
+    if (!aiClient || !isAiConnected || !settings) {
+      console.warn('AI接続が確立されていません')
         return
       }
 
       try {
-        setIsRecording(true)
-        setConversation(prev => [...prev, '🎤 録音中...'])
-        
-        // 音声録音開始
-        const mediaRecorder = new MediaRecorder(stream, { 
-          mimeType: 'audio/webm; codecs=opus' 
+      console.log('画面更新中: 新しいスクリーンショットを取得...')
+      
+      // 新しいWebカメラ写真を撮影
+      let newWebcamPhoto = ''
+      if (videoRef.current) {
+        const canvas = document.createElement('canvas')
+        const ctx = canvas.getContext('2d')
+        const video = videoRef.current
+
+        if (video.videoWidth && video.videoHeight && ctx) {
+          canvas.width = video.videoWidth
+          canvas.height = video.videoHeight
+          ctx.drawImage(video, 0, 0)
+          newWebcamPhoto = canvas.toDataURL('image/jpeg', 0.8)
+          console.log('新しいWebカメラ撮影成功')
+        }
+      }
+
+      // 新しいスクリーン写真を撮影
+      let newScreenPhoto = ''
+      try {
+        const displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { mediaSource: 'screen' },
+          audio: false
         })
         
-        audioChunks.current = []
-        
-        mediaRecorder.ondataavailable = (event) => {
-          if (event.data.size > 0) {
-            audioChunks.current.push(event.data)
-          }
+        const video = document.createElement('video')
+        video.srcObject = displayStream
+        video.muted = true
+        await video.play()
+
+        // 動画が安定するまで待機
+        await new Promise(resolve => setTimeout(resolve, 500))
+
+        const canvas = document.createElement('canvas')
+        const ctx = canvas.getContext('2d')
+        if (ctx && video.videoWidth > 0 && video.videoHeight > 0) {
+          canvas.width = video.videoWidth
+          canvas.height = video.videoHeight
+          ctx.drawImage(video, 0, 0)
+          newScreenPhoto = canvas.toDataURL('image/jpeg', 0.8)
+          console.log('新しいスクリーンショット撮影成功:', {
+            width: video.videoWidth,
+            height: video.videoHeight,
+            dataLength: newScreenPhoto.length
+          })
+        } else {
+          console.warn('Video dimensions not ready:', {
+            width: video.videoWidth,
+            height: video.videoHeight
+          })
         }
-        
-        mediaRecorder.onstop = async () => {
-          const audioBlob = new Blob(audioChunks.current, { type: 'audio/webm' })
-          
-          // 音声をBase64に変換してAIに送信
-          const reader = new FileReader()
-          reader.onloadend = () => {
-            const base64Audio = (reader.result as string).split(',')[1]
-            aiClient.sendAudio(base64Audio)
-            setConversation(prev => [...prev.slice(0, -1), '🎤 音声送信完了、AI応答待ち...'])
-          }
-          reader.readAsDataURL(audioBlob)
-        }
-        
-        setAudioRecorder(mediaRecorder)
-        mediaRecorder.start()
-        
-        // 5秒後に自動停止
-        setTimeout(() => {
-          if (mediaRecorder.state === 'recording') {
-            mediaRecorder.stop()
-            setIsRecording(false)
-          }
-        }, 5000)
-        
+
+        // ストリームを停止
+        displayStream.getTracks().forEach(track => track.stop())
       } catch (error) {
-        console.error('録音エラー:', error)
-        setConversation(prev => [...prev.slice(0, -1), '⚠️ 録音エラーが発生しました'])
-        setIsRecording(false)
+        console.error('スクリーンショット撮影エラー:', error)
+        // エラーの場合は既存の画像を使用
+        newScreenPhoto = capturedImages?.screenPhoto || ''
       }
-    } else if (isRecording && audioRecorder) {
-      // 録音停止
-      audioRecorder.stop()
-      setIsRecording(false)
+
+      // 画像検証とログ
+      console.log('取得した画像の検証:', {
+        webcam: {
+          hasData: !!newWebcamPhoto,
+          length: newWebcamPhoto.length,
+          isValidDataUrl: newWebcamPhoto.startsWith('data:image/')
+        },
+        screen: {
+          hasData: !!newScreenPhoto,
+          length: newScreenPhoto.length,
+          isValidDataUrl: newScreenPhoto.startsWith('data:image/')
+        }
+      })
+
+      // 新しい画像でcapturedImagesを更新
+      const newCapturedImages = {
+        webcamPhoto: newWebcamPhoto || capturedImages?.webcamPhoto || '',
+        screenPhoto: newScreenPhoto || capturedImages?.screenPhoto || '', // フォールバック追加
+        timestamp: new Date().toISOString()
+      }
+      setCapturedImages(newCapturedImages)
+
+      // 画像の最終確認
+      if (!newCapturedImages.screenPhoto || newCapturedImages.screenPhoto.length < 1000) {
+        console.warn('スクリーン画像が正常に取得できませんでした。既存画像を使用します。')
+        newCapturedImages.screenPhoto = capturedImages?.screenPhoto || ''
+      }
+
+      // 更新されたコンテキストでAI分析実行
+      const studyContext = {
+        studyContent: settings.studyContent,
+        elapsedTime: Date.now() - new Date(settings.startTime).getTime(),
+        targetTime: settings.targetTime,
+        pomodoroTime: settings.pomodoroTime,
+        isRefreshAnalysis: true // 更新分析フラグ
+      }
+      
+      console.log('画面更新完了: AIに新しい画像を送信中...', {
+        webcamSize: newCapturedImages.webcamPhoto.length,
+        screenSize: newCapturedImages.screenPhoto.length
+      })
+      aiClient.sendImages(newCapturedImages.webcamPhoto, newCapturedImages.screenPhoto, studyContext)
+      
+    } catch (error) {
+      console.error('画面更新エラー:', error)
     }
   }
 
@@ -385,65 +965,164 @@ export default function Break() {
           </div>
         </div>
 
-        {/* 会話ログ */}
+        {/* Zoom風のシンプル通話UI */}
         <div style={{
           background: '#2a2a2a',
-          borderRadius: '8px',
-          padding: '15px',
-          marginBottom: '15px',
-          overflowY: 'auto',
-          height: '150px',
-          flexShrink: 0
+          borderRadius: '12px',
+          padding: '20px',
+          marginBottom: '20px',
+          textAlign: 'center'
         }}>
-          <div style={{ color: '#ccc', fontSize: '14px', marginBottom: '10px' }}>
-            会話ログ
-          </div>
-          {conversation.map((message, index) => (
-            <div 
-              key={index} 
-              style={{ 
-                color: message.startsWith('キャラクター:') ? '#4ecdc4' : '#fff',
-                marginBottom: '8px',
-                fontSize: '14px',
-                lineHeight: '1.4'
-              }}
-            >
-              {message}
+          {/* AI音声インジケーター */}
+          {isAISpeaking && (
+            <div style={{
+              marginBottom: '15px',
+              color: '#4ecdc4',
+              fontSize: '14px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px'
+            }}>
+              <div style={{
+                width: '8px',
+                height: '8px',
+                background: '#4ecdc4',
+                borderRadius: '50%',
+                animation: 'pulse 1s infinite'
+              }}></div>
+              🤖 キャラクターが話しています...
             </div>
-          ))}
+          )}
+          
+          {/* 接続状態表示 */}
+          <div style={{
+            fontSize: '16px',
+            color: isAiConnected ? '#4ecdc4' : '#ff6b6b',
+            marginBottom: '10px'
+          }}>
+            {isAiConnected ? '🔗 AIキャラクターと接続中' : '❌ 接続していません'}
+          </div>
+          
+          {/* 部分的なテキスト表示（リアルタイム） */}
+          {partialText && (
+            <div style={{
+              background: 'rgba(78, 205, 196, 0.1)',
+              borderRadius: '8px',
+              padding: '10px',
+              margin: '10px 0',
+                fontSize: '14px',
+              color: '#4ecdc4',
+              fontStyle: 'italic'
+            }}>
+              💭 {partialText}
+            </div>
+          )}
         </div>
 
         {/* AI接続状況 */}
         <div style={{
           padding: '10px',
-          background: isAiConnected ? 'rgba(40, 167, 69, 0.2)' : 'rgba(255, 193, 7, 0.2)',
+          background: isAiConnected ? 'rgba(40, 167, 69, 0.2)' : 
+                     isConnecting ? 'rgba(255, 193, 7, 0.2)' : 'rgba(220, 53, 69, 0.2)',
           borderRadius: '6px',
-          border: `1px solid ${isAiConnected ? '#28a745' : '#ffc107'}`,
+          border: `1px solid ${isAiConnected ? '#28a745' : 
+                                isConnecting ? '#ffc107' : '#dc3545'}`,
           fontSize: '12px',
           textAlign: 'center',
           marginBottom: '10px'
         }}>
-          {isAiConnected ? '🟢 AI接続中（画像認識対応）' : '🟡 AI接続中...'}
+          {isAiConnected ? '🟢 WebRTC接続中（リアルタイム音声対話）' : 
+           isConnecting ? '🟡 接続中...' : '🔴 未接続'}
         </div>
 
-        {/* 音声入力ボタン */}
+        {/* AI状態表示 */}
+        {isAISpeaking && (
+          <div style={{
+            padding: '8px',
+            background: 'rgba(76, 175, 80, 0.2)',
+            borderRadius: '4px',
+            fontSize: '12px',
+            marginBottom: '10px',
+            color: '#4caf50',
+            textAlign: 'center'
+          }}>
+            🤖 AIが話しています...
+          </div>
+        )}
+
+        {/* 現在生成中のテキスト */}
+        {partialText && (
+          <div style={{
+            padding: '10px',
+            background: 'rgba(33, 150, 243, 0.1)',
+            borderRadius: '6px',
+            marginBottom: '10px',
+            fontSize: '14px',
+            color: '#2196f3',
+            opacity: 0.7
+          }}>
+            🤖 生成中: {partialText}
+          </div>
+        )}
+
+        {/* WebRTC接続制御ボタン */}
+        {!isAiConnected && !isConnecting ? (
         <button
-          onClick={handleStartRecording}
-          disabled={isRecording || !isAiConnected}
+            onClick={startConnection}
           style={{
             padding: '15px',
-            background: isRecording ? '#ffc107' : (isAiConnected ? '#28a745' : '#6c757d'),
+              background: '#007bff',
             color: 'white',
             border: 'none',
             borderRadius: '8px',
-            cursor: (isRecording || !isAiConnected) ? 'not-allowed' : 'pointer',
+              cursor: 'pointer',
             fontSize: '16px',
             marginBottom: '10px',
-            fontWeight: 'bold'
-          }}
-        >
-          {isRecording ? '🎤 録音中...' : (isAiConnected ? '🎤 話しかける' : '🎤 AI接続待ち')}
+              fontWeight: 'bold',
+              width: '100%'
+            }}
+          >
+            🎤 リアルタイム音声対話を開始
+          </button>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {/* 画面更新＋再分析ボタン */}
+            <button
+              onClick={handleRefreshAndAnalyze}
+              style={{
+                padding: '12px',
+                background: '#17a2b8',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: 'bold',
+                width: '100%'
+              }}
+            >
+              🔄 画面更新＋再分析
         </button>
+            
+            <button
+              onClick={stopConnection}
+              style={{
+                padding: '15px',
+                background: '#dc3545',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '16px',
+                fontWeight: 'bold',
+                width: '100%'
+              }}
+            >
+              🔇 音声対話を終了
+            </button>
+          </div>
+        )}
 
         {/* ナビゲーションボタン */}
         <div style={{ display: 'flex', gap: '8px' }}>
