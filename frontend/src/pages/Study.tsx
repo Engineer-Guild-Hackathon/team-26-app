@@ -31,7 +31,8 @@ export default function Study() {
         
         if (ctx) {
           ctx.drawImage(video, 0, 0)
-          const dataURL = canvas.toDataURL('image/jpeg', 0.8)
+          // 圧縮なし（最高画質）設定に変更
+          const dataURL = canvas.toDataURL('image/jpeg', 0.95)
           console.log('Webカメラ撮影成功:', { width: canvas.width, height: canvas.height, dataLength: dataURL.length })
           resolve(dataURL)
         } else {
@@ -115,7 +116,8 @@ export default function Study() {
           const ctx = canvas.getContext('2d')
           if (ctx) {
             ctx.drawImage(video, 0, 0)
-            resolve(canvas.toDataURL('image/jpeg', 0.8))
+            // 圧縮なし（最高画質）設定に変更
+            resolve(canvas.toDataURL('image/jpeg', 0.95))
           } else {
             reject(new Error('Canvas context not available'))
           }
@@ -156,7 +158,8 @@ export default function Study() {
     ctx.font = '16px Arial'
     ctx.fillText('※ 画面キャプチャが利用できない場合のフォールバック画像', 50, 700)
 
-    return canvas.toDataURL('image/jpeg', 0.8)
+    // 圧縮なし（最高画質）設定に変更
+    return canvas.toDataURL('image/jpeg', 0.95)
   }
 
 

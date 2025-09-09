@@ -135,19 +135,33 @@ class WebRTCRealtimeClient {
           voice: "alloy",
           input_audio_format: "pcm16",
           output_audio_format: "pcm16",
-          instructions: `あなたは学習支援キャラクターです。学習中の休憩時間に、親しみやすく励ましの言葉をかけてください。
+          instructions: `あなたは一緒に勉強している親しい友達です。Study with meで同じ分野を勉強している仲間として、タメ口で気軽に話しかけてください。
 
-【重要】画像が送信された場合は、必ずその内容を詳細に分析してください：
-- ウェブカメラ画像：学習者の表情、姿勢、疲労度を確認
-- スクリーン画像：学習内容、進捗状況、難易度を把握
-- 具体的で実用的なアドバイスを提供
+会話の特徴：
+- タメ口で親しみやすく（「〜だよ」「〜じゃん」など）
+- たまに軽くいじったり冗談を言う友達関係
+- 同じ分野を一緒に勉強している仲間感を出す
+- 短めの返答（1-2文程度）
+- 絵文字を適度に使用
 
-回答スタイル：
-- 優しく親しみやすい日本語
-- 「どんな感じ？」「それ難しいよね〜」のような自然な話し方
-- 学習者を励ます
-- 短めの返答（2-3文程度）
-- 絵文字を適度に使用`,
+【重要】2つの画像を必ず両方分析してコメントしてください：
+1. ウェブカメラ画像 = 今のユーザの状態（表情、疲れ具合など）
+2. スクリーンショット = ユーザが勉強している画面内容（最重要！）
+
+スクリーンショット（勉強画面）の実際の内容を正確に見て分析してください：
+- 画面に何が映っているかを正確に判断
+- 勉強系なら具体的に何を学習しているか
+- 遊び系なら何をしているか
+- 文字やアイコンを読み取って判断
+
+反応例（画面内容に応じて適切に使い分け）：
+- 勉強画面 → 「頑張ってるじゃん！」「その問題難しそう〜」
+- プログラミング → 「コード書いてるの？むずそう〜」
+- 動画サイト → 「あれ、動画見てない？」
+- ゲーム → 「おい、ゲームしてるじゃん笑」
+- SNS → 「また携帯いじってる〜」
+
+実際の画面内容に基づいて正確にコメントしてください。`,
         },
       }
       this.dataChannel!.send(JSON.stringify(sessionUpdate))
@@ -314,8 +328,8 @@ class WebRTCRealtimeClient {
         ctx.fillText('Screen Content', 10, targetHeight / 2)
       }
       
-      // 品質改善（よりバランスの取れた圧縮）
-      const quality = Math.max(0.3, Math.min(0.7, maxSizeKB / originalSizeKB))
+      // 圧縮なし対応（90-95%品質または無圧縮）
+      const quality = Math.max(0.9, Math.min(0.95, maxSizeKB / originalSizeKB))
       const compressed = canvas.toDataURL('image/jpeg', quality)
       
       const compressedSizeKB = (compressed.length * 0.75) / 1024
@@ -369,9 +383,26 @@ class WebRTCRealtimeClient {
       screenLength: screenPhoto.length 
     })
     
-    // 画像サイズをチェック・圧縮（画質改善）
-    const webcamCompressed = this.compressImage(webcamPhoto, 25)  // 画質改善
-    const screenCompressed = this.compressImage(screenPhoto, 35) // 画質改善
+    // 圧縮なし試行（生画像品質）
+    console.log('🔍 圧縮なし試行開始...')
+    const webcamOriginalSize = (webcamPhoto.length * 0.75) / 1024
+    const screenOriginalSize = (screenPhoto.length * 0.75) / 1024
+    console.log(`📊 元画像サイズ: Webcam=${webcamOriginalSize.toFixed(2)}KB, Screen=${screenOriginalSize.toFixed(2)}KB`)
+    
+    // 圧縮なしで試行（制限内なら生画像使用）
+    let webcamCompressed = webcamPhoto
+    let screenCompressed = screenPhoto
+    
+    // 制限を超える場合のみ圧縮
+    if (webcamOriginalSize > 100) {
+      console.log('📷 Webcam画像が大きすぎるため軽圧縮適用')
+      webcamCompressed = this.compressImage(webcamPhoto, 100)  // 軽圧縮
+    }
+    
+    if (screenOriginalSize > 200) {
+      console.log('🖥️ Screen画像が大きすぎるため軽圧縮適用')  
+      screenCompressed = this.compressImage(screenPhoto, 200) // 軽圧縮
+    }
 
     // 公式ドキュメント通りの形式でテキストメッセージ送信
     const textMessage = {
@@ -435,8 +466,8 @@ class WebRTCRealtimeClient {
       const messageStr = JSON.stringify(message)
       const sizeKB = (messageStr.length * 0.75) / 1024
       
-      if (sizeKB > 64) { // 制限を緩和（画質改善）
-        console.warn(`${label} 送信スキップ: ${sizeKB.toFixed(2)}KB (制限: 64KB)`)
+      if (sizeKB > 500) { // 圧縮なし対応（制限を大幅緩和）
+        console.warn(`${label} 送信スキップ: ${sizeKB.toFixed(2)}KB (制限: 500KB)`)
         return false
       }
       
