@@ -10,16 +10,16 @@ export interface OptimalCameraPosition {
 export const OPTIMAL_CAMERA_POSITION: OptimalCameraPosition = {
   position: {
     x: 0,
-    y: 2.5,
-    z: -5 // 背面からの最適な距離
+    y: 3.5, // 顔全体が見えるよう少し上から
+    z: -7 // 顔全体が見えるよう少し引く
   },
   target: {
     x: 0,
-    y: 2,
+    y: 2.5, // 顔の中心あたりを見る
     z: 0
   },
-  name: "最適位置",
-  description: "確定した最適なビューアングル"
+  name: "顔全体表示位置",
+  description: "顔全体がしっかり見える最適なビューアングル"
 }
 
 // プリセットカメラ位置（必要に応じて追加可能）

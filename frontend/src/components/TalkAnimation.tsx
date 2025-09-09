@@ -36,7 +36,7 @@ interface TalkAnimationProps {
 
 export default function TalkAnimation({ className }: TalkAnimationProps) {
   return (
-    <div className={className} style={{ width: '100%', height: '100vh' }}>
+    <div className={className} style={{ width: '100%', height: '100%' }}>
       <Canvas 
         camera={{ 
           position: [
@@ -44,7 +44,7 @@ export default function TalkAnimation({ className }: TalkAnimationProps) {
             OPTIMAL_CAMERA_POSITION.position.y,
             OPTIMAL_CAMERA_POSITION.position.z
           ],
-          fov: 50 
+          fov: 60 // 顔全体が見えるよう視野角を広げる 
         }}
         onCreated={({ camera }) => {
           camera.lookAt(
@@ -59,10 +59,6 @@ export default function TalkAnimation({ className }: TalkAnimationProps) {
         <pointLight position={[-10, -10, -5]} intensity={0.5} />
         
         <AnimatedModel />
-        
-        {/* グリッドヘルパー */}
-        <gridHelper args={[20, 20]} />
-        <axesHelper args={[5]} />
       </Canvas>
     </div>
   )
