@@ -86,12 +86,12 @@ export default function Home() {
           height: '100%', 
           padding: '32px', 
           boxSizing: 'border-box'
-        }}>
-          {/* ヘッダー */}
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'space-between', 
-            alignItems: 'center',
+    }}>
+      {/* ヘッダー */}
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center',
             marginBottom: '40px'
           }}>
             <div>
@@ -113,24 +113,24 @@ export default function Home() {
               </p>
             </div>
             <div style={{ display: 'flex', gap: '16px' }}>
-              <button 
-                style={{
+          <button 
+            style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',
                   padding: '12px 24px',
                   background: 'rgba(255,255,255,0.2)',
-                  color: 'white',
+              color: 'white',
                   border: '1px solid rgba(255,255,255,0.3)',
                   borderRadius: '16px',
-                  cursor: 'pointer',
+              cursor: 'pointer',
                   fontSize: '16px',
                   fontWeight: '600',
                   backdropFilter: 'blur(10px)',
                   transition: 'all 0.3s ease',
                   boxShadow: '0 4px 16px rgba(0,0,0,0.1)'
-                }}
-                onClick={() => navigate('/study-settings')}
+            }}
+            onClick={() => navigate('/study-settings')}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = 'rgba(255,255,255,0.3)'
                   e.currentTarget.style.transform = 'translateY(-2px)'
@@ -142,9 +142,9 @@ export default function Home() {
               >
                 <StudyIcon />
                 勉強開始
-              </button>
-              <button 
-                style={{
+          </button>
+          <button 
+            style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',
@@ -153,7 +153,7 @@ export default function Home() {
                   color: 'rgba(255,255,255,0.9)',
                   border: '1px solid rgba(255,255,255,0.2)',
                   borderRadius: '16px',
-                  cursor: 'pointer',
+              cursor: 'pointer',
                   fontSize: '16px',
                   fontWeight: '600',
                   backdropFilter: 'blur(10px)',
@@ -167,25 +167,25 @@ export default function Home() {
                 }}
               >
                 ⚙️ 設定
-              </button>
-            </div>
-          </div>
+          </button>
+        </div>
+      </div>
 
-          {/* メインコンテンツ */}
-          <div style={{ 
-            display: 'grid', 
+      {/* メインコンテンツ */}
+      <div style={{ 
+        display: 'grid', 
             gridTemplateColumns: '1fr 1fr 1fr', 
             gridTemplateRows: '1fr 1fr',
             gap: '24px',
             height: 'calc(100vh - 180px)'
           }}>
             {/* 学習記録 - 2列にまたがる */}
-            <div style={{
+        <div style={{
               gridColumn: '1 / 3',
               background: 'rgba(255, 255, 255, 0.15)',
               backdropFilter: 'blur(20px)',
               borderRadius: '24px',
-              padding: '24px',
+          padding: '24px',
               border: '1px solid rgba(255, 255, 255, 0.2)',
               boxShadow: '0 8px 32px rgba(0,0,0,0.1)'
             }}>
@@ -197,21 +197,21 @@ export default function Home() {
               </div>
               
               {/* 棒グラフ（コンパクト版） */}
-              <div style={{ 
-                display: 'flex', 
-                alignItems: 'end', 
-                justifyContent: 'space-around',
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'end', 
+            justifyContent: 'space-around',
                 height: '160px',
-                marginBottom: '20px',
+            marginBottom: '20px',
                 padding: '16px',
                 background: 'rgba(255, 255, 255, 0.05)',
                 borderRadius: '16px',
                 border: '1px solid rgba(255, 255, 255, 0.1)'
-              }}>
-                {dummyWeeklyData.map((hours, index) => (
+          }}>
+            {dummyWeeklyData.map((hours, index) => (
                   <div key={index} style={{ textAlign: 'center', position: 'relative' }}>
-                    <div 
-                      style={{
+                <div 
+                  style={{
                         width: '48px',
                         height: `${Math.max(hours * 20, 8)}px`,
                         background: `linear-gradient(135deg, 
@@ -250,12 +250,12 @@ export default function Home() {
                       fontSize: '14px',
                       fontWeight: '500' 
                     }}>
-                      {['月', '火', '水', '木', '金', '土', '日'][index]}
-                    </div>
-                  </div>
-                ))}
+                  {['月', '火', '水', '木', '金', '土', '日'][index]}
+                </div>
               </div>
-              
+            ))}
+          </div>
+
               <div style={{ 
                 display: 'flex', 
                 justifyContent: 'space-between',
@@ -273,17 +273,17 @@ export default function Home() {
                     📈 平均: {(totalWeeklyHours / 7).toFixed(1)}時間/日
                   </p>
                 </div>
-                <div style={{
+          <div style={{ 
                   fontSize: '3rem',
                   filter: 'drop-shadow(0 0 10px rgba(255,215,0,0.5))'
                 }}>
                   {totalWeeklyHours >= 20 ? '🏆' : totalWeeklyHours >= 10 ? '⭐' : '📚'}
                 </div>
-              </div>
-            </div>
+          </div>
+        </div>
 
             {/* 学習分野 - 右上 */}
-            <div style={{
+        <div style={{
               background: 'rgba(255, 255, 255, 0.15)',
               backdropFilter: 'blur(20px)',
               borderRadius: '24px',
@@ -299,21 +299,21 @@ export default function Home() {
                 </div>
                 
                 {/* 円グラフ（モダン版） */}
-                <div style={{ 
-                  display: 'flex',
-                  justifyContent: 'center',
-                  alignItems: 'center',
+          <div style={{ 
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
                   marginBottom: '20px'
-                }}>
-                  <div style={{
+          }}>
+            <div style={{
                     width: '100px',
                     height: '100px',
-                    borderRadius: '50%',
-                    background: `conic-gradient(
+              borderRadius: '50%',
+              background: `conic-gradient(
                       #ff6b9d 0% ${dummyStudyContent.math}%,
-                      #4ecdc4 ${dummyStudyContent.math}% ${dummyStudyContent.math + dummyStudyContent.english}%,
-                      #45b7d1 ${dummyStudyContent.math + dummyStudyContent.english}% ${dummyStudyContent.math + dummyStudyContent.english + dummyStudyContent.science}%,
-                      #96ceb4 ${dummyStudyContent.math + dummyStudyContent.english + dummyStudyContent.science}% 100%
+                #4ecdc4 ${dummyStudyContent.math}% ${dummyStudyContent.math + dummyStudyContent.english}%,
+                #45b7d1 ${dummyStudyContent.math + dummyStudyContent.english}% ${dummyStudyContent.math + dummyStudyContent.english + dummyStudyContent.science}%,
+                #96ceb4 ${dummyStudyContent.math + dummyStudyContent.english + dummyStudyContent.science}% 100%
                     )`,
                     boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
                     position: 'relative'
@@ -335,19 +335,19 @@ export default function Home() {
                       🎯
                     </div>
                   </div>
-                </div>
+          </div>
 
-                {/* 凡例 */}
+          {/* 凡例 */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {[
                     { label: '📐 数学', color: '#ff6b9d', value: dummyStudyContent.math, emoji: '📊' },
                     { label: '🗣️ 英語', color: '#4ecdc4', value: dummyStudyContent.english, emoji: '💬' },
                     { label: '🔬 理科', color: '#45b7d1', value: dummyStudyContent.science, emoji: '⚗️' },
                     { label: '📚 その他', color: '#96ceb4', value: dummyStudyContent.other, emoji: '✨' }
-                  ].map((item, index) => (
-                    <div key={index} style={{ 
-                      display: 'flex', 
-                      alignItems: 'center',
+            ].map((item, index) => (
+              <div key={index} style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
                       justifyContent: 'space-between',
                       background: 'rgba(255, 255, 255, 0.1)',
                       padding: '8px 12px',

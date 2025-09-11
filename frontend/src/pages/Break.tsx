@@ -24,15 +24,15 @@ class WebRTCRealtimeClient {
   private dataChannel: RTCDataChannel | null = null
   private mediaStream: MediaStream | null = null
   private onMessage: (message: any) => void
-  private onAudioResponse: (audioData: string) => void
-  private breakId: string
+  // private onAudioResponse: (audioData: string) => void - 現在未使用
+  // private breakId: string - 現在未使用
   private isSending: boolean = false // 送信状態管理
   private isResponseActive: boolean = false // レスポンス状態管理
 
   constructor(breakId: string, onMessage: (message: any) => void, _onAudioResponse: (audioData: string) => void) {
-    this.breakId = breakId
+    // this.breakId = breakId - 現在未使用
     this.onMessage = onMessage
-    this.onAudioResponse = _onAudioResponse
+    // this.onAudioResponse = _onAudioResponse - 現在未使用
   }
 
   async connect() {
@@ -135,19 +135,33 @@ class WebRTCRealtimeClient {
           voice: "alloy",
           input_audio_format: "pcm16",
           output_audio_format: "pcm16",
-          instructions: `あなたは学習支援キャラクターです。学習中の休憩時間に、親しみやすく励ましの言葉をかけてください。
+          instructions: `あなたは一緒に勉強している親しい友達です。Study with meで同じ分野を勉強している仲間として、タメ口で気軽に話しかけてください。
 
-【重要】画像が送信された場合は、必ずその内容を詳細に分析してください：
-- ウェブカメラ画像：学習者の表情、姿勢、疲労度を確認
-- スクリーン画像：学習内容、進捗状況、難易度を把握
-- 具体的で実用的なアドバイスを提供
+会話の特徴：
+- タメ口で親しみやすく（「〜だよ」「〜じゃん」など）
+- たまに軽くいじったり冗談を言う友達関係
+- 同じ分野を一緒に勉強している仲間感を出す
+- 短めの返答（1-2文程度）
+- 絵文字を適度に使用
 
-回答スタイル：
-- 優しく親しみやすい日本語
-- 「どんな感じ？」「それ難しいよね〜」のような自然な話し方
-- 学習者を励ます
-- 短めの返答（2-3文程度）
-- 絵文字を適度に使用`,
+【重要】2つの画像を必ず両方分析してコメントしてください：
+1. ウェブカメラ画像 = 今のユーザの状態（表情、疲れ具合など）
+2. スクリーンショット = ユーザが勉強している画面内容（最重要！）
+
+スクリーンショット（勉強画面）の実際の内容を正確に見て分析してください：
+- 画面に何が映っているかを正確に判断
+- 勉強系なら具体的に何を学習しているか
+- 遊び系なら何をしているか
+- 文字やアイコンを読み取って判断
+
+反応例（画面内容に応じて適切に使い分け）：
+- 勉強画面 → 「頑張ってるじゃん！」「その問題難しそう〜」
+- プログラミング → 「コード書いてるの？むずそう〜」
+- 動画サイト → 「あれ、動画見てない？」
+- ゲーム → 「おい、ゲームしてるじゃん笑」
+- SNS → 「また携帯いじってる〜」
+
+実際の画面内容に基づいて正確にコメントしてください。`,
         },
       }
       this.dataChannel!.send(JSON.stringify(sessionUpdate))
@@ -155,7 +169,7 @@ class WebRTCRealtimeClient {
       // DataChannel接続後に画像分析を実行
     setTimeout(() => {
         this.onMessage({ type: 'dataChannel_ready', message: 'DataChannel準備完了' })
-      }, 1000)
+    }, 1000)
     })
 
     this.dataChannel.addEventListener("message", (event) => {
@@ -277,51 +291,76 @@ class WebRTCRealtimeClient {
   }
 
   // 画像圧縮関数（実際の画像処理版）
-  private compressImage(dataUrl: string, maxSizeKB: number = 100): string {
+  private async compressImage(dataUrl: string, maxSizeKB: number = 200): Promise<string> {
     try {
       const originalSizeKB = (dataUrl.length * 0.75) / 1024
-      console.log(`元画像: ${originalSizeKB.toFixed(2)}KB (目標: ${maxSizeKB}KB)`)
+      console.log(`🖼️ 画像圧縮開始: ${originalSizeKB.toFixed(2)}KB → 目標: ${maxSizeKB}KB`)
       
+      // 目標サイズ以下なら無加工で返す
       if (originalSizeKB <= maxSizeKB) {
+        console.log('✅ 圧縮不要（目標サイズ以下）')
         return dataUrl
       }
       
-      // Imageオブジェクトを使用して実際の画像を処理（同期的に）
-      const img = new Image()
-      img.src = dataUrl
-      
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return dataUrl
-      
-      // 圧縮後のサイズを計算
-      const compressionRatio = Math.sqrt(maxSizeKB / originalSizeKB)
-      const targetWidth = Math.max(100, Math.min(400, img.width * compressionRatio))
-      const targetHeight = Math.max(75, Math.min(300, img.height * compressionRatio))
-      
-      canvas.width = targetWidth
-      canvas.height = targetHeight
-      
-      // 画像が読み込まれていない場合の代替処理
-      if (img.complete && img.naturalWidth > 0) {
-        // 実際の画像を描画
-        ctx.drawImage(img, 0, 0, targetWidth, targetHeight)
-      } else {
-        // 代替として元画像の情報から推定描画
-        ctx.fillStyle = '#f5f5f5'
-        ctx.fillRect(0, 0, targetWidth, targetHeight)
-        ctx.fillStyle = '#ddd'
-        ctx.fillText('Screen Content', 10, targetHeight / 2)
-      }
-      
-      // 品質改善（よりバランスの取れた圧縮）
-      const quality = Math.max(0.3, Math.min(0.7, maxSizeKB / originalSizeKB))
-      const compressed = canvas.toDataURL('image/jpeg', quality)
-      
-      const compressedSizeKB = (compressed.length * 0.75) / 1024
-      console.log(`圧縮後: ${compressedSizeKB.toFixed(2)}KB (品質: ${quality.toFixed(2)})`)
-      
-      return compressed
+      return new Promise<string>((resolve) => {
+        const img = new Image()
+        img.onload = () => {
+          const canvas = document.createElement('canvas')
+          const ctx = canvas.getContext('2d')
+          if (!ctx) {
+            resolve(dataUrl)
+            return
+          }
+          
+          // 高品質を保ちつつ適度に縮小
+          const maxDimension = maxSizeKB > 150 ? 800 : 600
+          let { width, height } = img
+          
+          if (width > height) {
+            if (width > maxDimension) {
+              height = (height * maxDimension) / width
+              width = maxDimension
+            }
+          } else {
+            if (height > maxDimension) {
+              width = (width * maxDimension) / height
+              height = maxDimension
+            }
+          }
+          
+          canvas.width = Math.round(width)
+          canvas.height = Math.round(height)
+          
+          // 高品質レンダリング設定
+          ctx.imageSmoothingEnabled = true
+          ctx.imageSmoothingQuality = 'high'
+          
+          // 画像を描画
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+          
+          // 高品質JPEG（90-95%品質）
+          let quality = 0.92
+          let compressed = canvas.toDataURL('image/jpeg', quality)
+          let compressedSizeKB = (compressed.length * 0.75) / 1024
+          
+          // 品質を段階的に下げて調整
+          while (compressedSizeKB > maxSizeKB && quality > 0.7) {
+            quality -= 0.05
+            compressed = canvas.toDataURL('image/jpeg', quality)
+            compressedSizeKB = (compressed.length * 0.75) / 1024
+          }
+          
+          console.log(`✅ 圧縮完了: ${compressedSizeKB.toFixed(2)}KB (品質: ${(quality * 100).toFixed(0)}%)`)
+          resolve(compressed)
+        }
+        
+        img.onerror = () => {
+          console.warn('⚠️ 画像読み込み失敗、元画像を返します')
+          resolve(dataUrl)
+        }
+        
+        img.src = dataUrl
+      }).catch(() => dataUrl) // Promise エラー時も元画像を返す
       
     } catch (error) {
       console.error('画像圧縮エラー:', error)
@@ -347,7 +386,7 @@ class WebRTCRealtimeClient {
   }
 
   // 画像分析（OpenAI Realtime API公式ドキュメント通り）
-  sendImages(webcamPhoto: string, screenPhoto: string, studyContext: any) {
+  async sendImages(webcamPhoto: string, screenPhoto: string, studyContext: any) {
     if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
       console.error('Data channel not open. State:', this.dataChannel?.readyState)
       return
@@ -369,9 +408,26 @@ class WebRTCRealtimeClient {
       screenLength: screenPhoto.length 
     })
     
-    // 画像サイズをチェック・圧縮（画質改善）
-    const webcamCompressed = this.compressImage(webcamPhoto, 25)  // 画質改善
-    const screenCompressed = this.compressImage(screenPhoto, 35) // 画質改善
+    // 圧縮なし試行（生画像品質）
+    console.log('🔍 圧縮なし試行開始...')
+    const webcamOriginalSize = (webcamPhoto.length * 0.75) / 1024
+    const screenOriginalSize = (screenPhoto.length * 0.75) / 1024
+    console.log(`📊 元画像サイズ: Webcam=${webcamOriginalSize.toFixed(2)}KB, Screen=${screenOriginalSize.toFixed(2)}KB`)
+    
+    // 高品質画像処理（非同期圧縮）
+    let webcamCompressed = webcamPhoto
+    let screenCompressed = screenPhoto
+    
+    // 制限を超える場合のみ圧縮（高品質維持）
+    if (webcamOriginalSize > 150) {
+      console.log('📷 Webcam画像を高品質圧縮中...')
+      webcamCompressed = await this.compressImage(webcamPhoto, 150)
+    }
+    
+    if (screenOriginalSize > 250) {
+      console.log('🖥️ Screen画像を高品質圧縮中...')  
+      screenCompressed = await this.compressImage(screenPhoto, 250)
+    }
 
     // 公式ドキュメント通りの形式でテキストメッセージ送信
     const textMessage = {
@@ -435,8 +491,8 @@ class WebRTCRealtimeClient {
       const messageStr = JSON.stringify(message)
       const sizeKB = (messageStr.length * 0.75) / 1024
       
-      if (sizeKB > 64) { // 制限を緩和（画質改善）
-        console.warn(`${label} 送信スキップ: ${sizeKB.toFixed(2)}KB (制限: 64KB)`)
+      if (sizeKB > 500) { // 圧縮なし対応（制限を大幅緩和）
+        console.warn(`${label} 送信スキップ: ${sizeKB.toFixed(2)}KB (制限: 500KB)`)
         return false
       }
       
@@ -462,18 +518,11 @@ class WebRTCRealtimeClient {
       sendSafeMessage(screenMessage, '🖥️ スクリーン')
     }, 200)
 
-    // レスポンス生成
+    // 送信完了状態をリセット（バックエンドが自動応答するため、フロントは応答要求不要）
     setTimeout(() => {
-      if (this.dataChannel && this.dataChannel.readyState === 'open') {
-        console.log('🎤 レスポンス生成開始')
-        this.dataChannel.send(JSON.stringify({
-          type: 'response.create',
-          response: { modalities: ['text', 'audio'] }
-        }))
-      }
-      // 送信完了状態をリセット
       this.isSending = false
-    }, 300)
+      console.log('🎤 画像送信完了：バックエンドで自動応答処理中...')
+    }, 100)
   }
 
   disconnect() {
@@ -522,7 +571,7 @@ export default function Break() {
 
 
   // AI応答のメッセージハンドラ（WebRTC対応）
-  const handleAiMessage = (message: any) => {
+  const handleAiMessage = async (message: any) => {
     console.log('AI message:', message)
     
     switch (message.type) {
@@ -557,7 +606,7 @@ export default function Break() {
         
       case 'error':
         setIsConnecting(false)
-        setIsAiConnected(false)
+      setIsAiConnected(false)
         break
         
       case 'disconnected':
@@ -566,22 +615,31 @@ export default function Break() {
         break
 
       case 'dataChannel_ready':
-        // DataChannel準備完了後に画像分析実行
-        if (capturedImages && settings) {
-          console.log('DataChannel準備完了: 自動スクリーンショット分析を実行')
-          // 自動画像分析開始
+        // DataChannel準備完了：Break画面で直接リアルタイム撮影して送信
+        console.log('📡 DataChannel準備完了イベント受信', {
+          settings: !!settings,
+          hasInitialImageSent,
+          aiClient: !!aiClient,
+          settingsContent: settings ? `${settings.studyContent}` : 'null'
+        })
+        
+        // DataChannel準備完了をマーク
+        setIsAiConnected(true)
+        
+        // settingsが既にロードされている場合は即座に実行
+        if (settings && !hasInitialImageSent) {
+          console.log('🚀 DataChannel準備完了: Break画面で直接スクリーンショット撮影開始')
+          setHasInitialImageSent(true) // 初回送信済みマーク
           
-          const studyContext = {
-            studyContent: settings.studyContent,
-            elapsedTime: Date.now() - new Date(settings.startTime).getTime(),
-            targetTime: settings.targetTime,
-            pomodoroTime: settings.pomodoroTime,
-            isInitialConversation: true
-          }
-          
-          if (aiClient) {
-            aiClient.sendImages(capturedImages.webcamPhoto, capturedImages.screenPhoto, studyContext)
-          }
+          // 初回専用撮影（isAiConnectedチェックなし）
+          console.log('📸 handleInitialScreenCapture() 実行開始...')
+          handleInitialScreenCapture()
+        } else {
+          console.log('⏭️ DataChannel準備完了: 初回送信条件に合わず', {
+            settings: !!settings,
+            hasInitialImageSent,
+            reason: !settings ? 'settings not loaded - will retry when settings load' : 'already sent initial image'
+          })
         }
         break
         
@@ -597,25 +655,39 @@ export default function Break() {
     // TODO: 音声再生実装
   }
 
-  // 設定と撮影画像を読み込み
+  // 設定読み込みと初期化（画像は直接Break画面で撮影）
   useEffect(() => {
     const savedSettings = localStorage.getItem('studySettings')
     if (savedSettings) {
-      setSettings(JSON.parse(savedSettings))
+      const parsedSettings = JSON.parse(savedSettings)
+      setSettings(parsedSettings)
+      console.log('⚙️ Settings読み込み完了:', {
+        studyContent: parsedSettings.studyContent,
+        startTime: parsedSettings.startTime,
+        targetTime: parsedSettings.targetTime
+      })
+    } else {
+      console.warn('⚠️ Settings not found in localStorage')
     }
     
-    // 撮影した画像を読み込み
-    const savedImages = localStorage.getItem('capturedImages')
-    if (savedImages) {
-      const parsedImages = JSON.parse(savedImages)
-      setCapturedImages(parsedImages)
-      console.log('撮影画像を読み込みました:', parsedImages)
-    }
+    // Study画面からの古い画像データをクリア
+    localStorage.removeItem('capturedImages')
+    console.log('🔄 Study画面の画像データをクリア - Break画面で直接撮影を実行')
     
     // breakIdを生成（タイムスタンプベース）
     const generatedBreakId = `break_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
     setBreakId(generatedBreakId)
   }, [])
+
+  // settingsロード後の初回撮影トリガー
+  useEffect(() => {
+    // settingsがロードされ、AI接続済み、かつ初回送信未完了の場合
+    if (settings && isAiConnected && !hasInitialImageSent && aiClient) {
+      console.log('⚙️ Settings + AI接続完了: 初回撮影を実行')
+      setHasInitialImageSent(true)
+      handleInitialScreenCapture()
+    }
+  }, [settings, isAiConnected, hasInitialImageSent, aiClient])
 
   // WebRTC Realtime AI接続
   const startConnection = async () => {
@@ -623,7 +695,7 @@ export default function Break() {
     
     setIsConnecting(true)
     const client = new WebRTCRealtimeClient(breakId, handleAiMessage, handleAiAudio)
-    setAiClient(client)
+      setAiClient(client)
     
     try {
       await client.connect()
@@ -641,10 +713,10 @@ export default function Break() {
       aiClient.disconnect()
       setAiClient(null)
     }
-    setIsAiConnected(false)
+      setIsAiConnected(false)
     setIsConnecting(false)
     setIsAISpeaking(false)
-  }
+    }
 
   // 初期化時のbreakId生成
   useEffect(() => {
@@ -652,23 +724,10 @@ export default function Break() {
     setBreakId(generatedBreakId)
   }, [])
 
-  // 撮影画像が読み込まれたら自動でAIに送信（初回のみ）
-  useEffect(() => {
-    if (capturedImages && aiClient && isAiConnected && settings && !hasInitialImageSent) {
-      console.log('初回画像をAIに送信中...')
-      setHasInitialImageSent(true) // 初回送信済みマーク
-      
-      const studyContext = {
-        studyContent: settings.studyContent,
-        elapsedTime: Date.now() - new Date(settings.startTime).getTime(),
-        targetTime: settings.targetTime,
-        pomodoroTime: settings.pomodoroTime,
-        isInitialConversation: true // 初回フラグ
-      }
-      
-      aiClient.sendImages(capturedImages.webcamPhoto, capturedImages.screenPhoto, studyContext)
-    }
-  }, [capturedImages, aiClient, isAiConnected, settings, hasInitialImageSent])
+  // 初回送信はDataChannel準備完了時に統一（重複送信を防ぐため、このuseEffectは無効化）
+  // useEffect(() => {
+  //   console.log('❌ この初回送信useEffectは無効化されました（重複送信防止）')
+  // }, [])
 
   // Webカメラと音声を開始
   useEffect(() => {
@@ -754,6 +813,154 @@ export default function Break() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
   }
 
+
+  // 初回専用画面撮影（AI接続チェックなし）
+  const handleInitialScreenCapture = async () => {
+    console.log('🎬 handleInitialScreenCapture() 関数開始', {
+      aiClient: !!aiClient,
+      settings: !!settings,
+      videoRef: !!videoRef.current
+    })
+    
+    if (!aiClient || !settings) {
+      console.warn('⚠️ AI接続またはSettingsが不足しています', {
+        aiClient: !!aiClient,
+        settings: !!settings
+      })
+      return
+    }
+
+    try {
+      console.log('🎬 初回画面撮影中: 新しいスクリーンショットを取得...')
+      
+      // 新しいWebカメラ写真を撮影
+      let newWebcamPhoto = ''
+      if (videoRef.current) {
+        const canvas = document.createElement('canvas')
+        const ctx = canvas.getContext('2d')
+        const video = videoRef.current
+        
+        if (ctx && video.videoWidth > 0 && video.videoHeight > 0) {
+          canvas.width = video.videoWidth
+          canvas.height = video.videoHeight
+          ctx.drawImage(video, 0, 0)
+          newWebcamPhoto = canvas.toDataURL('image/jpeg', 0.95)
+          console.log('✅ 初回Webカメラ撮影成功')
+        } else {
+          console.warn('❌ 初回Webカメラ撮影失敗 - フォールバック処理')
+        }
+      }
+
+      // 新しいスクリーン写真を撮影
+      let newScreenPhoto = ''
+      try {
+        const displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 30 }
+          },
+          audio: false
+        })
+        
+        const video = document.createElement('video')
+        video.srcObject = displayStream
+        video.muted = true
+        await video.play()
+
+        // 動画が安定するまで待機
+        await new Promise(resolve => setTimeout(resolve, 500))
+
+        const canvas = document.createElement('canvas')
+        const ctx = canvas.getContext('2d')
+        
+        console.log('📺 初回ビデオ状態チェック:', {
+          videoWidth: video.videoWidth,
+          videoHeight: video.videoHeight,
+          readyState: video.readyState,
+          currentTime: video.currentTime
+        })
+        
+        if (ctx && video.videoWidth > 0 && video.videoHeight > 0) {
+          canvas.width = video.videoWidth
+          canvas.height = video.videoHeight
+          ctx.drawImage(video, 0, 0)
+          newScreenPhoto = canvas.toDataURL('image/jpeg', 0.95)
+          console.log('✅ 初回スクリーンショット撮影成功:', {
+            width: video.videoWidth,
+            height: video.videoHeight,
+            dataLength: newScreenPhoto.length,
+            preview: newScreenPhoto.substring(0, 100) + '...'
+          })
+        } else {
+          console.error('❌ 初回スクリーンショット撮影失敗:', {
+            ctx: !!ctx,
+            videoWidth: video.videoWidth,
+            videoHeight: video.videoHeight
+          })
+        }
+
+        // ストリームを停止
+        displayStream.getTracks().forEach(track => track.stop())
+      } catch (error) {
+        console.error('初回スクリーンキャプチャエラー:', error)
+        // エラーの場合は既存の画像を使用
+        newScreenPhoto = capturedImages?.screenPhoto || ''
+      }
+
+      // 画像検証とログ
+      console.log('初回取得した画像の検証:', {
+        webcam: {
+          hasData: !!newWebcamPhoto,
+          length: newWebcamPhoto.length,
+          isValidDataUrl: newWebcamPhoto.startsWith('data:image/')
+        },
+        screen: {
+          hasData: !!newScreenPhoto,
+          length: newScreenPhoto.length,
+          isValidDataUrl: newScreenPhoto.startsWith('data:image/')
+        }
+      })
+
+      // 新しい画像でcapturedImagesを更新
+      const newCapturedImages = {
+        webcamPhoto: newWebcamPhoto || capturedImages?.webcamPhoto || '',
+        screenPhoto: newScreenPhoto || capturedImages?.screenPhoto || '',
+        timestamp: new Date().toISOString()
+      }
+      setCapturedImages(newCapturedImages)
+
+      // 画像の最終確認
+      if (!newCapturedImages.screenPhoto || newCapturedImages.screenPhoto.length < 1000) {
+        console.warn('初回スクリーン画像が正常に取得できませんでした。')
+        return
+      }
+
+      // 初回コンテキストでAI分析実行
+      const studyContext = {
+        studyContent: settings.studyContent,
+        elapsedTime: Date.now() - new Date(settings.startTime).getTime(),
+        targetTime: settings.targetTime,
+        pomodoroTime: settings.pomodoroTime,
+        isInitialConversation: true // 初回会話フラグ
+      }
+      
+      console.log('🚀 初回撮影完了: AIに現在の画面を送信中...', {
+        webcamSize: newCapturedImages.webcamPhoto.length,
+        screenSize: newCapturedImages.screenPhoto.length,
+        timestamp: newCapturedImages.timestamp,
+        webcamPreview: newCapturedImages.webcamPhoto.substring(0, 50),
+        screenPreview: newCapturedImages.screenPhoto.substring(0, 50),
+        isInitialCapture: true,
+        captureLocation: 'Break画面初回撮影'
+      })
+      await aiClient.sendImages(newCapturedImages.webcamPhoto, newCapturedImages.screenPhoto, studyContext)
+        
+    } catch (error) {
+      console.error('初回画面撮影エラー:', error)
+    }
+  }
+
   // 画面更新＋再分析処理（新しいスクリーンショットを取得）
   const handleRefreshAndAnalyze = async () => {
     if (!aiClient || !isAiConnected || !settings) {
@@ -775,7 +982,7 @@ export default function Break() {
           canvas.width = video.videoWidth
           canvas.height = video.videoHeight
           ctx.drawImage(video, 0, 0)
-          newWebcamPhoto = canvas.toDataURL('image/jpeg', 0.8)
+          newWebcamPhoto = canvas.toDataURL('image/jpeg', 0.95)
           console.log('新しいWebカメラ撮影成功')
         }
       }
@@ -784,7 +991,11 @@ export default function Break() {
       let newScreenPhoto = ''
       try {
         const displayStream = await navigator.mediaDevices.getDisplayMedia({
-          video: { mediaSource: 'screen' },
+          video: {
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 30 }
+          },
           audio: false
         })
         
@@ -798,20 +1009,30 @@ export default function Break() {
 
         const canvas = document.createElement('canvas')
         const ctx = canvas.getContext('2d')
+        
+        console.log('📺 ビデオ状態チェック:', {
+          videoWidth: video.videoWidth,
+          videoHeight: video.videoHeight,
+          readyState: video.readyState,
+          currentTime: video.currentTime
+        })
+        
         if (ctx && video.videoWidth > 0 && video.videoHeight > 0) {
           canvas.width = video.videoWidth
           canvas.height = video.videoHeight
           ctx.drawImage(video, 0, 0)
-          newScreenPhoto = canvas.toDataURL('image/jpeg', 0.8)
-          console.log('新しいスクリーンショット撮影成功:', {
+          newScreenPhoto = canvas.toDataURL('image/jpeg', 0.95)
+          console.log('✅ 新しいスクリーンショット撮影成功:', {
             width: video.videoWidth,
             height: video.videoHeight,
-            dataLength: newScreenPhoto.length
+            dataLength: newScreenPhoto.length,
+            preview: newScreenPhoto.substring(0, 100) + '...'
           })
         } else {
-          console.warn('Video dimensions not ready:', {
-            width: video.videoWidth,
-            height: video.videoHeight
+          console.error('❌ スクリーンショット撮影失敗:', {
+            ctx: !!ctx,
+            videoWidth: video.videoWidth,
+            videoHeight: video.videoHeight
           })
         }
 
@@ -860,19 +1081,34 @@ export default function Break() {
         isRefreshAnalysis: true // 更新分析フラグ
       }
       
-      console.log('画面更新完了: AIに新しい画像を送信中...', {
+      const isInitialCapture = !hasInitialImageSent
+      console.log(`🚀 ${isInitialCapture ? '初回' : '更新'}撮影完了: AIに現在の画面を送信中...`, {
         webcamSize: newCapturedImages.webcamPhoto.length,
-        screenSize: newCapturedImages.screenPhoto.length
+        screenSize: newCapturedImages.screenPhoto.length,
+        timestamp: newCapturedImages.timestamp,
+        webcamPreview: newCapturedImages.webcamPhoto.substring(0, 50),
+        screenPreview: newCapturedImages.screenPhoto.substring(0, 50),
+        isInitialCapture,
+        captureLocation: 'Break画面直接撮影'
       })
-      aiClient.sendImages(newCapturedImages.webcamPhoto, newCapturedImages.screenPhoto, studyContext)
-      
-    } catch (error) {
+      await aiClient.sendImages(newCapturedImages.webcamPhoto, newCapturedImages.screenPhoto, studyContext)
+        
+      } catch (error) {
       console.error('画面更新エラー:', error)
     }
   }
 
   const handleContinueStudy = () => {
     navigate('/study')
+  }
+
+  // デバッグ用：キャッシュクリア機能
+  const handleClearCache = () => {
+    localStorage.removeItem('capturedImages')
+    setCapturedImages(null)
+    setHasInitialImageSent(false)
+    console.log('🗑️ キャッシュをクリアしました')
+    alert('画像キャッシュをクリアしました。新しいスクリーンショットを撮影してください。')
   }
 
   const handleEndStudy = () => {
@@ -976,7 +1212,7 @@ export default function Break() {
           {/* AI音声インジケーター */}
           {isAISpeaking && (
             <div style={{
-              marginBottom: '15px',
+          marginBottom: '15px',
               color: '#4ecdc4',
               fontSize: '14px',
               display: 'flex',
@@ -992,7 +1228,7 @@ export default function Break() {
                 animation: 'pulse 1s infinite'
               }}></div>
               🤖 キャラクターが話しています...
-            </div>
+          </div>
           )}
           
           {/* 接続状態表示 */}
@@ -1066,33 +1302,35 @@ export default function Break() {
           </div>
         )}
 
-        {/* WebRTC接続制御ボタン */}
+        {/* AI接続状態に応じたボタン表示 */}
         {!isAiConnected && !isConnecting ? (
+          /* 音声対話開始ボタン */
+          <div style={{ marginBottom: '15px' }}>
         <button
-            onClick={startConnection}
+              onClick={startConnection}
           style={{
             padding: '15px',
-              background: '#007bff',
+                background: '#007bff',
             color: 'white',
             border: 'none',
             borderRadius: '8px',
-              cursor: 'pointer',
+                cursor: 'pointer',
             fontSize: '16px',
-            marginBottom: '10px',
-              fontWeight: 'bold',
-              width: '100%'
-            }}
-          >
-            🎤 リアルタイム音声対話を開始
-          </button>
+                fontWeight: 'bold',
+                width: '100%'
+          }}
+        >
+              🎤 リアルタイム音声対話を開始
+        </button>
+          </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {/* 画面更新＋再分析ボタン */}
+          /* AI接続中のコントロール */
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '15px' }}>
             <button
-              onClick={handleRefreshAndAnalyze}
+              onClick={stopConnection}
               style={{
                 padding: '12px',
-                background: '#17a2b8',
+                background: '#dc3545',
                 color: 'white',
                 border: 'none',
                 borderRadius: '6px',
@@ -1102,29 +1340,39 @@ export default function Break() {
                 width: '100%'
               }}
             >
-              🔄 画面更新＋再分析
-        </button>
-            
-            <button
-              onClick={stopConnection}
-              style={{
-                padding: '15px',
-                background: '#dc3545',
-                color: 'white',
-                border: 'none',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                fontSize: '16px',
-                fontWeight: 'bold',
-                width: '100%'
-              }}
-            >
               🔇 音声対話を終了
             </button>
           </div>
         )}
 
+        {/* 画面更新ボタン（AI接続中のみ、独立して表示） */}
+        {isAiConnected && (
+          <div style={{ marginBottom: '15px' }}>
+            <button
+              onClick={handleRefreshAndAnalyze}
+              style={{
+                padding: '12px',
+                background: 'linear-gradient(45deg, #17a2b8, #20c997)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: 'bold',
+                width: '100%',
+                boxShadow: '0 3px 6px rgba(0,0,0,0.2)',
+                transition: 'transform 0.2s ease'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
+              onMouseLeave={(e) => e.currentTarget.style.transform = 'translateY(0)'}
+            >
+              🔄 画面更新＋再分析
+            </button>
+          </div>
+        )}
+
         {/* ナビゲーションボタン */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
             onClick={handleContinueStudy}
@@ -1155,6 +1403,24 @@ export default function Break() {
             }}
           >
             中断
+            </button>
+          </div>
+          
+          {/* デバッグ用キャッシュクリアボタン */}
+          <button
+            onClick={handleClearCache}
+            style={{
+              padding: '8px',
+              background: '#ffc107',
+              color: '#000',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              opacity: 0.7
+            }}
+          >
+            🗑️ 画像キャッシュクリア（デバッグ用）
           </button>
         </div>
       </div>
