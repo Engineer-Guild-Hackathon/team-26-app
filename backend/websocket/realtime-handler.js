@@ -572,6 +572,16 @@ function handleOpenAIMessage(connectionInfo, message) {
 async function handleScreenshotAnalysis(connectionInfo, message) {
   const { ws, openaiWs } = connectionInfo;
   
+
+  // 重複リクエスト防止（5秒以内の連続リクエストを無視）
+  const currentTime = Date.now();
+  if (connectionInfo.lastAnalysisTime && (currentTime - connectionInfo.lastAnalysisTime) < 5000) {
+    console.log('⏭️ 重複画像分析リクエストを無視 (5秒以内)');
+    return;
+  }
+  connectionInfo.lastAnalysisTime = currentTime;
+  
+
   try {
     if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || !connectionInfo.openaiConnected) {
       console.log('OpenAI connection not ready, using fallback. State:', openaiWs?.readyState, 'Connected:', connectionInfo.openaiConnected);
@@ -580,6 +590,31 @@ async function handleScreenshotAnalysis(connectionInfo, message) {
 
     const { webcamImage, screenImage, studyContext } = message;
     
+
+    // 画像データの検証
+    console.log('🔍 受信した画像データの検証:', {
+      webcamImageSize: webcamImage?.length || 0,
+      screenImageSize: screenImage?.length || 0,
+      webcamPrefix: webcamImage?.substring(0, 50) || 'EMPTY',
+      screenPrefix: screenImage?.substring(0, 50) || 'EMPTY',
+      studyContent: studyContext?.studyContent,
+      isInitialConversation: studyContext?.isInitialConversation
+    });
+    
+    if (!webcamImage || !screenImage) {
+      console.error('❌ 画像データが不完全:', {
+        webcam: !!webcamImage,
+        screen: !!screenImage
+      });
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: '画像データが不完全です',
+        timestamp: new Date().toISOString()
+      }));
+      return;
+    }
+    
+
     // Realtime APIで画像を含む会話アイテムを作成
     const conversationItem = {
       type: 'conversation.item.create',
@@ -630,17 +665,21 @@ async function handleScreenshotAnalysis(connectionInfo, message) {
 
     // アイテムをOpenAI Realtime APIに送信
     openaiWs.send(JSON.stringify(conversationItem));
-    
-    // レスポンス生成を開始
-    const createResponse = {
-      type: 'response.create',
-      response: {
-        modalities: ['text', 'audio'],
-        instructions: '画像を分析して、学習者に対する励ましとアドバイスを日本語で提供してください。'
-      }
-    };
-    
-    openaiWs.send(JSON.stringify(createResponse));
+
+    // 画像送信後、少し待ってから応答生成を開始（確実に処理されるように）
+    setTimeout(() => {
+      const createResponse = {
+        type: 'response.create',
+        response: {
+          modalities: ['text', 'audio'],
+          instructions: '画像を分析して、学習者に対する励ましとアドバイスを日本語で提供してください。'
+        }
+      };
+      
+      openaiWs.send(JSON.stringify(createResponse));
+      console.log('🎤 画像分析後の自動応答を要求しました');
+    }, 100);
+
 
     // 分析開始の通知
     ws.send(JSON.stringify({
