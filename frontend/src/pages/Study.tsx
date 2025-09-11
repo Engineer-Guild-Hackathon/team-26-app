@@ -90,9 +90,9 @@ export default function Study() {
       const stream = await getDisplayStream()
       return await captureFromDisplayStream(stream)
     } catch (error) {
-      console.error('スクリーンショット撮影エラー:', error)
-      // フォールバック: 学習情報画像
-      return await createFallbackScreenshot()
+      console.error('❌ スクリーンショット撮影エラー:', error)
+      // フォールバック画像を送らず、エラーを投げる
+      throw new Error('スクリーンキャプチャーの許可が必要です。再度お試しください。')
     }
   }
 
@@ -164,23 +164,15 @@ export default function Study() {
 
 
   const handleBreakTransition = async () => {
-    console.log('休憩遷移時のスクリーンショット撮影中...')
+    console.log('🚀 休憩に遷移 - Break画面で直接スクリーンショット撮影を実行')
     
-    // Webカメラとスクリーンショットを並行して撮影
-    const [webcamPhoto, screenPhoto] = await Promise.all([
-      captureWebcamPhoto(),
-      captureScreenshot()
-    ])
-
-    // 撮影した画像をローカルストレージに保存
-    const capturedData = {
-      webcamPhoto,
-      screenPhoto,
-      timestamp: new Date().toISOString()
-    }
-    localStorage.setItem('capturedImages', JSON.stringify(capturedData))
+    // 古い画像データをクリア
+    localStorage.removeItem('capturedImages')
+    console.log('🗑️ 古い画像データをクリアしました')
     
-    console.log('スクリーンショット撮影完了')
+    // Study画面では撮影せず、直接Break画面に遷移
+    // Break画面で現在の画面をリアルタイム撮影する
+    console.log('✅ Break画面に遷移 - スクリーンショットはBreak画面で撮影')
     navigate('/break')
   }
 
