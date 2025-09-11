@@ -788,24 +788,27 @@ export default function Break() {
     }
   }, [])
 
-  // 休憩タイマー
+  // 休憩タイマー（経過時間のみ - 自動遷移は無効化）
   useEffect(() => {
     const timer = setInterval(() => {
-      setBreakElapsedTime(prev => {
-        const newTime = prev + 1
-        
-        // 休憩時間終了でStudy画面に戻る
-        if (newTime >= breakDuration) {
-          navigate('/study')
-          return newTime
-        }
-        
-        return newTime
-      })
+      setBreakElapsedTime(prev => prev + 1)
+      
+      // 【後で復活】自動遷移ロジックを一時的に無効化
+      // setBreakElapsedTime(prev => {
+      //   const newTime = prev + 1
+      //   
+      //   // 休憩時間終了でStudy画面に戻る
+      //   if (newTime >= breakDuration) {
+      //     navigate('/study')
+      //     return newTime
+      //   }
+      //   
+      //   return newTime
+      // })
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [breakDuration, navigate])
+  }, [])  // 【後で復活】依存配列: [breakDuration, navigate]
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -1196,9 +1199,10 @@ export default function Break() {
           <div style={{ color: '#4ecdc4', fontSize: '24px', fontWeight: 'bold' }}>
             {formatTime(breakElapsedTime)}
           </div>
-          <div style={{ color: '#ccc', fontSize: '12px' }}>
+          {/* 【後で復活】残り時間表示を一時的に無効化 */}
+          {/* <div style={{ color: '#ccc', fontSize: '12px' }}>
             残り: {formatTime(Math.max(0, breakDuration - breakElapsedTime))}
-          </div>
+          </div> */}
         </div>
 
         {/* Zoom風のシンプル通話UI */}

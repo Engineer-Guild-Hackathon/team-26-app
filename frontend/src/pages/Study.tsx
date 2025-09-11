@@ -183,14 +183,14 @@ export default function Study() {
       const parsedSettings = JSON.parse(savedSettings)
       setSettings(parsedSettings)
       
-      // ポモドーロ±σ（標準偏差）でランダムな時間を計算
-      const baseTime = parsedSettings.pomodoroTime * 60 // 秒に変換
-      const sigma = baseTime * 0.2 // 20%の標準偏差
-      const randomBreakTime = Math.max(
-        baseTime + (Math.random() - 0.5) * 2 * sigma,
-        baseTime * 0.5 // 最低でも50%の時間は確保
-      )
-      setNextBreakTime(Math.floor(randomBreakTime))
+      // 【後で復活】ポモドーロタイマー計算を一時的に無効化
+      // const baseTime = parsedSettings.pomodoroTime * 60 // 秒に変換
+      // const sigma = baseTime * 0.2 // 20%の標準偏差
+      // const randomBreakTime = Math.max(
+      //   baseTime + (Math.random() - 0.5) * 2 * sigma,
+      //   baseTime * 0.5 // 最低でも50%の時間は確保
+      // )
+      // setNextBreakTime(Math.floor(randomBreakTime))
     } else {
       navigate('/study-settings')
     }
@@ -223,30 +223,33 @@ export default function Study() {
     }
   }, [])
 
-  // タイマー
+  // タイマー（経過時間のみ - 自動遷移は無効化）
   useEffect(() => {
     const timer = setInterval(() => {
-      setElapsedTime(prev => {
-        const newTime = prev + 1
-        
-        // 休憩時間になったらスクリーンショット撮影して休憩画面に遷移
-        if (newTime >= nextBreakTime && nextBreakTime > 0) {
-          handleBreakTransition()
-          return newTime
-        }
-        
-        // 目標時間に達したらホームに戻る
-        if (settings && newTime >= settings.targetTime * 60) {
-          navigate('/')
-          return newTime
-        }
-        
-        return newTime
-      })
+      setElapsedTime(prev => prev + 1)
+      
+      // 【後で復活】自動遷移ロジックを一時的に無効化
+      // setElapsedTime(prev => {
+      //   const newTime = prev + 1
+      //   
+      //   // 休憩時間になったらスクリーンショット撮影して休憩画面に遷移
+      //   if (newTime >= nextBreakTime && nextBreakTime > 0) {
+      //     handleBreakTransition()
+      //     return newTime
+      //   }
+      //   
+      //   // 目標時間に達したらホームに戻る
+      //   if (settings && newTime >= settings.targetTime * 60) {
+      //     navigate('/')
+      //     return newTime
+      //   }
+      //   
+      //   return newTime
+      // })
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [nextBreakTime, settings, navigate])
+  }, [])  // 【後で復活】依存配列: [nextBreakTime, settings, navigate]
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -307,7 +310,8 @@ export default function Study() {
         </div>
 
         {/* 次の休憩まで */}
-        <div style={{
+        {/* 【後で復活】休憩タイマー表示を一時的に無効化 */}
+        {/* <div style={{
           marginTop: '10px',
           padding: '15px',
           background: '#444',
@@ -319,7 +323,7 @@ export default function Study() {
           <div style={{ color: '#4ecdc4', fontSize: '18px', fontWeight: 'bold' }}>
             {formatTime(Math.max(0, nextBreakTime - elapsedTime))}
           </div>
-        </div>
+        </div> */}
 
         {/* ボタンエリア */}
         <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
