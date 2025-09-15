@@ -572,6 +572,7 @@ function handleOpenAIMessage(connectionInfo, message) {
 async function handleScreenshotAnalysis(connectionInfo, message) {
   const { ws, openaiWs } = connectionInfo;
   
+
   // 重複リクエスト防止（5秒以内の連続リクエストを無視）
   const currentTime = Date.now();
   if (connectionInfo.lastAnalysisTime && (currentTime - connectionInfo.lastAnalysisTime) < 5000) {
@@ -580,6 +581,7 @@ async function handleScreenshotAnalysis(connectionInfo, message) {
   }
   connectionInfo.lastAnalysisTime = currentTime;
   
+
   try {
     if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || !connectionInfo.openaiConnected) {
       console.log('OpenAI connection not ready, using fallback. State:', openaiWs?.readyState, 'Connected:', connectionInfo.openaiConnected);
@@ -588,6 +590,7 @@ async function handleScreenshotAnalysis(connectionInfo, message) {
 
     const { webcamImage, screenImage, studyContext } = message;
     
+
     // 画像データの検証
     console.log('🔍 受信した画像データの検証:', {
       webcamImageSize: webcamImage?.length || 0,
@@ -611,6 +614,7 @@ async function handleScreenshotAnalysis(connectionInfo, message) {
       return;
     }
     
+
     // Realtime APIで画像を含む会話アイテムを作成
     const conversationItem = {
       type: 'conversation.item.create',
@@ -661,7 +665,7 @@ async function handleScreenshotAnalysis(connectionInfo, message) {
 
     // アイテムをOpenAI Realtime APIに送信
     openaiWs.send(JSON.stringify(conversationItem));
-    
+
     // 画像送信後、少し待ってから応答生成を開始（確実に処理されるように）
     setTimeout(() => {
       const createResponse = {
@@ -675,6 +679,7 @@ async function handleScreenshotAnalysis(connectionInfo, message) {
       openaiWs.send(JSON.stringify(createResponse));
       console.log('🎤 画像分析後の自動応答を要求しました');
     }, 100);
+
 
     // 分析開始の通知
     ws.send(JSON.stringify({
