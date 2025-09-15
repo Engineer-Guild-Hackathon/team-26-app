@@ -183,14 +183,9 @@ export default function Study() {
       const parsedSettings = JSON.parse(savedSettings)
       setSettings(parsedSettings)
       
-      // 【後で復活】ポモドーロタイマー計算を一時的に無効化
-      // const baseTime = parsedSettings.pomodoroTime * 60 // 秒に変換
-      // const sigma = baseTime * 0.2 // 20%の標準偏差
-      // const randomBreakTime = Math.max(
-      //   baseTime + (Math.random() - 0.5) * 2 * sigma,
-      //   baseTime * 0.5 // 最低でも50%の時間は確保
-      // )
-      // setNextBreakTime(Math.floor(randomBreakTime))
+      // シンプルなポモドーロ時間設定（±σなし）
+      const pomodoroSeconds = parsedSettings.pomodoroTime * 60 // 分を秒に変換
+      setNextBreakTime(pomodoroSeconds)
     } else {
       navigate('/study-settings')
     }
@@ -309,9 +304,8 @@ export default function Study() {
           </div>
         </div>
 
-        {/* 次の休憩まで */}
-        {/* 【後で復活】休憩タイマー表示を一時的に無効化 */}
-        {/* <div style={{
+        {/* 次の休憩まで（シンプル表示） */}
+        <div style={{
           marginTop: '10px',
           padding: '15px',
           background: '#444',
@@ -323,7 +317,7 @@ export default function Study() {
           <div style={{ color: '#4ecdc4', fontSize: '18px', fontWeight: 'bold' }}>
             {formatTime(Math.max(0, nextBreakTime - elapsedTime))}
           </div>
-        </div> */}
+        </div>
 
         {/* ボタンエリア */}
         <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>

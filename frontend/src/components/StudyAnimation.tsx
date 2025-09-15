@@ -5,8 +5,8 @@ import * as THREE from 'three'
 import { OPTIMAL_CAMERA_POSITION } from '../constants/cameraPositions'
 
 function AnimatedModel() {
-  const { scene, animations } = useGLTF('/udemy_test.glb')
-  const mixer = useRef<THREE.AnimationMixer>()
+  const { scene, animations } = useGLTF('/udemy_test2.glb')
+  const mixer = useRef<THREE.AnimationMixer | null>(null)
 
   useEffect(() => {
     if (scene && animations) {
@@ -21,7 +21,7 @@ function AnimatedModel() {
     }
   }, [scene, animations])
 
-  useFrame((state, delta) => {
+  useFrame((_, delta) => {
     if (mixer.current) {
       mixer.current.update(delta)
     }
