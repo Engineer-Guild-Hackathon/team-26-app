@@ -26,11 +26,13 @@ const studyRoutes = require('./routes/study');
 const aiRoutes = require('./routes/ai');
 const userRoutes = require('./routes/user');
 const sessionRoutes = require('./routes/session');
+const materialsRoutes = require('./routes/materials');
 
 // API ルート
 app.use('/api/study', studyRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/materials', materialsRoutes);
 app.use('/session', sessionRoutes);
 
 // 基本ルート
@@ -41,7 +43,8 @@ app.get("/", (req, res) => {
     endpoints: [
       "/api/study/*",
       "/api/ai/*", 
-      "/api/user/*"
+      "/api/user/*",
+      "/api/materials/*"
     ]
   });
 });
