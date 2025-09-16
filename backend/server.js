@@ -26,12 +26,16 @@ const studyRoutes = require('./routes/study');
 const aiRoutes = require('./routes/ai');
 const userRoutes = require('./routes/user');
 const sessionRoutes = require('./routes/session');
+const firebaseMaterialsRoutes = require('./routes/firebase-materials');
+const firebaseTestRoutes = require('./routes/firebase-test');
 
 // API ルート
 app.use('/api/study', studyRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/user', userRoutes);
 app.use('/session', sessionRoutes);
+app.use('/api/firebase-materials', firebaseMaterialsRoutes);
+app.use('/api/firebase-test', firebaseTestRoutes);
 
 // 基本ルート
 app.get("/", (req, res) => {
@@ -73,8 +77,20 @@ app.use((req, res) => {
   });
 });
 
+// Firebase初期化
+const { initializeFirebase } = require('./config/firebase');
+try {
+  initializeFirebase();
+  console.log('🔥 Firebase初期化完了');
+} catch (error) {
+  console.error('❌ Firebase初期化失敗:', error);
+  process.exit(1);
+}
+
 const port = process.env.PORT || 3001;
 server.listen(port, () => {
   console.log(`Backend running on http://localhost:${port}`);
   console.log(`WebSocket server ready on ws://localhost:${port}`);
+  console.log(`🔥 Firebase Materials API: http://localhost:${port}/api/firebase-materials`);
+  console.log(`🧪 Firebase Test API: http://localhost:${port}/api/firebase-test/connection`);
 });
