@@ -11,9 +11,23 @@ const server = http.createServer(app);
 // セキュリティ系ヘッダ追加
 app.use(helmet());
 
-// CORS設定
+// CORS設定（複数のフロントエンドポートを許可）
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000',
+  process.env.FRONTEND_URL
+].filter(Boolean); // 空の値を除外
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:5173",
+  origin: function (origin, callback) {
+    // originがundefined（同一オリジン）または許可リストに含まれる場合は許可
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true
 }));
 
