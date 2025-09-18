@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import StudyAnimation from '../components/StudyAnimation'
-import html2canvas from 'html2canvas'
+import StudyAnimation from 'src/components/StudyAnimation'
+import { type MaterialFolder, type MaterialFile, firebaseMaterialsService } from 'src/services/firebaseMaterials'
 
 export default function Study() {
   const navigate = useNavigate()
@@ -11,170 +11,264 @@ export default function Study() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [stream, setStream] = useState<MediaStream | null>(null)
 
-  // スクリーンショット撮影関数
-  const captureWebcamPhoto = (): Promise<string> => {
-    return new Promise((resolve) => {
-      if (videoRef.current) {
-        const video = videoRef.current
-        
-        // ビデオが準備できているかチェック
-        if (video.videoWidth === 0 || video.videoHeight === 0) {
-          console.warn('Webカメラのビデオサイズが0です')
-          resolve('data:,') // 空のデータURL
-          return
+  // 教材選択関連の状態
+  const [allFolders, setAllFolders] = useState<MaterialFolder[]>([])
+  const [currentFolder, setCurrentFolder] = useState<MaterialFolder | null>(null)
+  const [files, setFiles] = useState<MaterialFile[]>([])
+  const [selectedMaterial, setSelectedMaterial] = useState<MaterialFile | null>(null)
+  const [breadcrumbs, setBreadcrumbs] = useState<MaterialFolder[]>([])
+  const [_loading, setLoading] = useState(false)
+  
+  // --- ファイル内容プレビュー機能 ---
+  const [textContent, setTextContent] = useState<string | null>(null);
+  const [isContentLoading, setIsContentLoading] = useState(false);
+
+  // --- フリック/ホイール操作改善 ---
+  const [currentItemIndex, setCurrentItemIndex] = useState(0)
+  const [currentItems, setCurrentItems] = useState<(MaterialFolder | MaterialFile)[]>([])
+  const [touchStart, setTouchStart] = useState<{ x: number, y: number } | null>(null)
+  const [touchEnd, setTouchEnd] = useState<{ x: number, y: number } | null>(null)
+  const wheelTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const interactionPanelRef = useRef<HTMLDivElement>(null); // イベントリスナーを設定するDOM要素への参照
+
+  // 教材フォルダとファイル取得
+  useEffect(() => {
+    const initializeData = async () => {
+      await fetchAllFolders()
+    }
+    initializeData()
+  }, [])
+
+  // allFoldersが更新されたら、ルートのファイルを取得
+  useEffect(() => {
+    if (allFolders.length > 0 && !currentFolder) {
+      fetchFiles(null) 
+    }
+  }, [allFolders, currentFolder])
+
+  const fetchAllFolders = async () => {
+    try {
+      setLoading(true)
+      const rootFolders = await firebaseMaterialsService.getFolders()
+      let allFoldersData: MaterialFolder[] = [...rootFolders]
+      
+      for (const folder of rootFolders) {
+        const childFolders = await loadChildFolders(folder.id, allFoldersData)
+        allFoldersData = [...allFoldersData, ...childFolders]
+      }
+      
+      setAllFolders(allFoldersData)
+    } catch (error) {
+      console.error('フォルダ取得エラー:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const loadChildFolders = async (parentId: string, currentFolders: MaterialFolder[]): Promise<MaterialFolder[]> => {
+    try {
+      const childFolders = await firebaseMaterialsService.getChildFolders(parentId)
+      let allChildren: MaterialFolder[] = [...childFolders]
+      
+      for (const child of childFolders) {
+        const grandChildren = await loadChildFolders(child.id, [...currentFolders, ...allChildren])
+        allChildren = [...allChildren, ...grandChildren]
+      }
+      
+      return allChildren
+    } catch (error)
+    {
+      console.error(`子フォルダ取得エラー (parentId: ${parentId}):`, error)
+      return []
+    }
+  }
+
+  const fetchFiles = async (folderId: string | null) => {
+    try {
+      const filesData = folderId ? await firebaseMaterialsService.getFiles(folderId) : [];
+      setFiles(filesData);
+    } catch (error) {
+      console.error('ファイル取得エラー:', error);
+      setFiles([]);
+    }
+  }
+
+  // パンくずリスト生成
+  const generateBreadcrumbs = (folder: MaterialFolder | null) => {
+    if (!folder) {
+        setBreadcrumbs([])
+        return
+    }
+    
+    const newBreadcrumbs: MaterialFolder[] = []
+    let currentItem: MaterialFolder | undefined = folder
+    
+    while (currentItem) {
+      newBreadcrumbs.unshift(currentItem)
+      currentItem = allFolders.find(f => f.id === currentItem?.parentId)
+    }
+    
+    setBreadcrumbs(newBreadcrumbs)
+  }
+
+  // フォルダナビゲーション
+  const handleFolderClick = useCallback((folder: MaterialFolder) => {
+    setCurrentFolder(folder)
+    fetchFiles(folder.id)
+    generateBreadcrumbs(folder)
+  }, [allFolders]);
+
+  const handleNavigateToRoot = useCallback(() => {
+    setCurrentFolder(null)
+    fetchFiles(null)
+    setBreadcrumbs([])
+  }, []);
+
+  // --- イベントハンドラ (useCallbackでメモ化) ---
+  const handleTouchStart = useCallback((e: TouchEvent) => {
+    e.preventDefault();
+    const touch = e.targetTouches[0];
+    setTouchEnd(null);
+    setTouchStart({ x: touch.clientX, y: touch.clientY });
+  }, []);
+
+  const handleTouchMove = useCallback((e: TouchEvent) => {
+    e.preventDefault();
+    const touch = e.targetTouches[0];
+    setTouchEnd({ x: touch.clientX, y: touch.clientY });
+  }, []);
+
+  const handleTouchEnd = useCallback(() => {
+    if (!touchStart || !touchEnd) return;
+
+    const distanceX = touchStart.x - touchEnd.x;
+    const distanceY = touchStart.y - touchEnd.y;
+    const minFlickDistance = 50;
+
+    if (Math.abs(distanceY) > Math.abs(distanceX) && Math.abs(distanceY) > minFlickDistance) {
+        const isUpSwipe = distanceY > minFlickDistance;
+        const isDownSwipe = distanceY < -minFlickDistance;
+
+        if (isUpSwipe) {
+            const parentFolder = currentFolder ? allFolders.find(f => f.id === currentFolder.parentId) : null;
+            if (parentFolder) handleFolderClick(parentFolder);
+            else if (currentFolder) handleNavigateToRoot();
+        } else if (isDownSwipe) {
+            const selectedItem = currentItems[currentItemIndex];
+            if (selectedItem && 'parentId' in selectedItem) {
+                handleFolderClick(selectedItem as MaterialFolder);
+            }
         }
-        
-        const canvas = document.createElement('canvas')
-        canvas.width = video.videoWidth
-        canvas.height = video.videoHeight
-        const ctx = canvas.getContext('2d')
-        
-        if (ctx) {
-          ctx.drawImage(video, 0, 0)
-          // 圧縮なし（最高画質）設定に変更
-          const dataURL = canvas.toDataURL('image/jpeg', 0.95)
-          console.log('Webカメラ撮影成功:', { width: canvas.width, height: canvas.height, dataLength: dataURL.length })
-          resolve(dataURL)
+    } else if (Math.abs(distanceX) > Math.abs(distanceY) && Math.abs(distanceX) > minFlickDistance) {
+        const isLeftSwipe = distanceX > minFlickDistance;
+        const isRightSwipe = distanceX < -minFlickDistance;
+        if (currentItems.length > 0) {
+            if (isLeftSwipe) setCurrentItemIndex(i => (i + 1) % currentItems.length);
+            else if (isRightSwipe) setCurrentItemIndex(i => (i - 1 + currentItems.length) % currentItems.length);
+        }
+    }
+    
+    setTouchStart(null);
+    setTouchEnd(null);
+  }, [touchStart, touchEnd, currentItems, currentItemIndex, currentFolder, allFolders, handleFolderClick, handleNavigateToRoot]);
+
+  const handleWheel = useCallback((e: WheelEvent) => {
+    e.preventDefault();
+    if (wheelTimeoutRef.current) clearTimeout(wheelTimeoutRef.current);
+
+    wheelTimeoutRef.current = setTimeout(() => {
+        const { deltaX, deltaY } = e;
+        const minDelta = 10;
+
+        if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > minDelta) {
+            if (deltaY > 0) { // 下へ
+                const selectedItem = currentItems[currentItemIndex];
+                if (selectedItem && 'parentId' in selectedItem) {
+                    handleFolderClick(selectedItem as MaterialFolder);
+                }
+            } else { // 上へ
+                const parentFolder = currentFolder ? allFolders.find(f => f.id === currentFolder.parentId) : null;
+                if (parentFolder) handleFolderClick(parentFolder);
+                else if (currentFolder) handleNavigateToRoot();
+            }
+        } else if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > minDelta) {
+            if (currentItems.length > 0) {
+                if (deltaX > 0) setCurrentItemIndex(i => (i + 1) % currentItems.length);
+                else setCurrentItemIndex(i => (i - 1 + currentItems.length) % currentItems.length);
+            }
+        }
+    }, 50);
+  }, [currentItems, currentItemIndex, currentFolder, allFolders, handleFolderClick, handleNavigateToRoot]);
+
+  // --- passive: falseでイベントリスナーを登録 ---
+  useEffect(() => {
+    const panel = interactionPanelRef.current;
+    if (!panel) return;
+
+    panel.addEventListener('touchstart', handleTouchStart, { passive: false });
+    panel.addEventListener('touchmove', handleTouchMove, { passive: false });
+    panel.addEventListener('touchend', handleTouchEnd, { passive: false });
+    panel.addEventListener('wheel', handleWheel, { passive: false });
+
+    return () => {
+      panel.removeEventListener('touchstart', handleTouchStart);
+      panel.removeEventListener('touchmove', handleTouchMove);
+      panel.removeEventListener('touchend', handleTouchEnd);
+      panel.removeEventListener('wheel', handleWheel);
+    };
+  }, [handleTouchStart, handleTouchMove, handleTouchEnd, handleWheel]);
+
+  // --- ナビゲーションリストと3D表示の連携 (改善版) ---
+  useEffect(() => {
+    const newChildFolders = allFolders.filter(folder => folder.parentId === (currentFolder?.id || null));
+    const items: (MaterialFolder | MaterialFile)[] = [...newChildFolders, ...files];
+    setCurrentItems(items);
+    setCurrentItemIndex(0);
+  }, [currentFolder, files, allFolders]);
+
+  useEffect(() => {
+    if (currentItems.length > 0 && currentItemIndex < currentItems.length) {
+        const item = currentItems[currentItemIndex];
+        if (item && 'type' in item) {
+            setSelectedMaterial(item as MaterialFile);
         } else {
-          console.error('Canvas context取得失敗')
-          resolve('data:,')
+            setSelectedMaterial(null);
         }
-      } else {
-        console.error('videoRef.currentがnullです')
-        resolve('data:,')
-      }
-    })
-  }
-
-  // 保存されたディスプレイストリーム（初回のみ選択）
-  const [savedDisplayStream, setSavedDisplayStream] = useState<MediaStream | null>(null)
-
-  // ディスプレイストリームを取得（初回のみダイアログ表示）
-  const getDisplayStream = async (): Promise<MediaStream> => {
-    if (savedDisplayStream && savedDisplayStream.active) {
-      console.log('保存済みのディスプレイストリームを使用')
-      return savedDisplayStream
+    } else {
+        setSelectedMaterial(null);
     }
+  }, [currentItemIndex, currentItems]);
 
-    try {
-      console.log('新しいディスプレイストリームを取得中...')
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          mediaSource: 'screen' as any,
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          frameRate: { ideal: 30 }
-        },
-        audio: false
-      })
+  // --- 選択された教材の内容を取得 ---
+  useEffect(() => {
+    const fetchContent = async () => {
+        if (selectedMaterial && selectedMaterial.type === 'text') {
+            setIsContentLoading(true);
+            setTextContent(null);
+            try {
+                const content = await firebaseMaterialsService.getTextContent(selectedMaterial.id);
+                setTextContent(content);
+            } catch (error) {
+                console.error("テキスト内容の取得に失敗:", error);
+                setTextContent("エラー: 内容を読み込めませんでした。");
+            } finally {
+                setIsContentLoading(false);
+            }
+        } else {
+            setTextContent(null);
+        }
+    };
+    fetchContent();
+  }, [selectedMaterial]);
 
-      setSavedDisplayStream(stream)
-      
-      // ストリームが終了した時のハンドラ
-      stream.getVideoTracks()[0].addEventListener('ended', () => {
-        console.log('ディスプレイストリーム終了')
-        setSavedDisplayStream(null)
-      })
-
-      return stream
-    } catch (error) {
-      console.error('ディスプレイストリーム取得エラー:', error)
-      throw error
+  // WebRTCの自動接続フラグを設定してBreak画面へ
+  const handleBreak = useCallback(() => {
+    localStorage.setItem('autoConnectWebRTC', 'true')
+    if (selectedMaterial) {
+      localStorage.setItem('selectedMaterial', JSON.stringify(selectedMaterial))
     }
-  }
-
-  const captureScreenshot = async (): Promise<string> => {
-    console.log('スクリーンショット撮影開始')
-    
-    try {
-      const stream = await getDisplayStream()
-      return await captureFromDisplayStream(stream)
-    } catch (error) {
-      console.error('❌ スクリーンショット撮影エラー:', error)
-      // フォールバック画像を送らず、エラーを投げる
-      throw new Error('スクリーンキャプチャーの許可が必要です。再度お試しください。')
-    }
-  }
-
-  // ディスプレイストリームからスクリーンショットをキャプチャ
-  const captureFromDisplayStream = async (stream: MediaStream): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const video = document.createElement('video')
-      video.srcObject = stream
-      video.autoplay = true
-      video.muted = true
-      
-      video.onloadedmetadata = () => {
-        video.play()
-        
-        // 少し待ってからキャプチャ
-        setTimeout(() => {
-          const canvas = document.createElement('canvas')
-          canvas.width = video.videoWidth
-          canvas.height = video.videoHeight
-          
-          const ctx = canvas.getContext('2d')
-          if (ctx) {
-            ctx.drawImage(video, 0, 0)
-            // 圧縮なし（最高画質）設定に変更
-            resolve(canvas.toDataURL('image/jpeg', 0.95))
-          } else {
-            reject(new Error('Canvas context not available'))
-          }
-        }, 100)
-      }
-      
-      video.onerror = () => {
-        reject(new Error('Video loading failed'))
-      }
-    })
-  }
-
-  // フォールバック用の学習情報スクリーンショット
-  const createFallbackScreenshot = async (): Promise<string> => {
-    const canvas = document.createElement('canvas')
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return ''
-
-    canvas.width = 1200
-    canvas.height = 800
-    ctx.fillStyle = '#1a1a1a'
-    ctx.fillRect(0, 0, 1200, 800)
-    
-    ctx.fillStyle = '#ffffff'
-    ctx.font = 'bold 28px Arial'
-    ctx.fillText('📚 Study Session', 50, 100)
-    
-    ctx.font = '18px Arial'
-    ctx.fillStyle = '#4ecdc4'
-    ctx.fillText('学習内容: ' + (settings?.studyContent || '未設定'), 50, 150)
-    
-    const timeStr = `${Math.floor(elapsedTime / 60)}:${(elapsedTime % 60).toString().padStart(2, '0')}`
-    ctx.fillText('経過時間: ' + timeStr, 50, 200)
-    
-    ctx.fillText('撮影時刻: ' + new Date().toLocaleString(), 50, 250)
-    
-    ctx.fillStyle = '#666666'
-    ctx.font = '16px Arial'
-    ctx.fillText('※ 画面キャプチャが利用できない場合のフォールバック画像', 50, 700)
-
-    // 圧縮なし（最高画質）設定に変更
-    return canvas.toDataURL('image/jpeg', 0.95)
-  }
-
-
-  const handleBreakTransition = async () => {
-    console.log('🚀 休憩に遷移 - Break画面で直接スクリーンショット撮影を実行')
-    
-    // 古い画像データをクリア
-    localStorage.removeItem('capturedImages')
-    console.log('🗑️ 古い画像データをクリアしました')
-    
-    // Study画面では撮影せず、直接Break画面に遷移
-    // Break画面で現在の画面をリアルタイム撮影する
-    console.log('✅ Break画面に遷移 - スクリーンショットはBreak画面で撮影')
     navigate('/break')
-  }
+  }, [navigate, selectedMaterial]);
 
   // 設定を読み込み
   useEffect(() => {
@@ -182,9 +276,7 @@ export default function Study() {
     if (savedSettings) {
       const parsedSettings = JSON.parse(savedSettings)
       setSettings(parsedSettings)
-      
-      // シンプルなポモドーロ時間設定（±σなし）
-      const pomodoroSeconds = parsedSettings.pomodoroTime * 60 // 分を秒に変換
+      const pomodoroSeconds = parsedSettings.pomodoroTime * 60
       setNextBreakTime(pomodoroSeconds)
     } else {
       navigate('/study-settings')
@@ -195,10 +287,7 @@ export default function Study() {
   useEffect(() => {
     const startCamera = async () => {
       try {
-        const mediaStream = await navigator.mediaDevices.getUserMedia({ 
-          video: true, 
-          audio: false 
-        })
+        const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
         setStream(mediaStream)
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream
@@ -207,10 +296,7 @@ export default function Study() {
         console.error('カメラアクセスエラー:', error)
       }
     }
-
     startCamera()
-
-    // クリーンアップ
     return () => {
       if (stream) {
         stream.getTracks().forEach(track => track.stop())
@@ -218,183 +304,197 @@ export default function Study() {
     }
   }, [])
 
-  // タイマー（経過時間のみ - 自動遷移は無効化）
+  // タイマー機能
   useEffect(() => {
+    if (!nextBreakTime) return
     const timer = setInterval(() => {
-      setElapsedTime(prev => prev + 1)
-      
-      // 【後で復活】自動遷移ロジックを一時的に無効化
-      // setElapsedTime(prev => {
-      //   const newTime = prev + 1
-      //   
-      //   // 休憩時間になったらスクリーンショット撮影して休憩画面に遷移
-      //   if (newTime >= nextBreakTime && nextBreakTime > 0) {
-      //     handleBreakTransition()
-      //     return newTime
-      //   }
-      //   
-      //   // 目標時間に達したらホームに戻る
-      //   if (settings && newTime >= settings.targetTime * 60) {
-      //     navigate('/')
-      //     return newTime
-      //   }
-      //   
-      //   return newTime
-      // })
+      setElapsedTime(prev => {
+        const newElapsed = prev + 1
+        if (newElapsed >= nextBreakTime) {
+          clearInterval(timer)
+          handleBreak()
+          return newElapsed
+        }
+        return newElapsed
+      })
     }, 1000)
-
     return () => clearInterval(timer)
-  }, [])  // 【後で復活】依存配列: [nextBreakTime, settings, navigate]
+  }, [nextBreakTime, handleBreak])
 
   const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
+    const hrs = Math.floor(seconds / 3600)
+    const mins = Math.floor((seconds % 3600) / 60)
     const secs = seconds % 60
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
-  }
-
-  const handleInterrupt = () => {
-    navigate('/')
+    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
   }
 
   if (!settings) {
-    return <div>Loading...</div>
+    return <div>設定を読み込み中...</div>
   }
 
   return (
     <div style={{
       width: '100vw',
       height: '100vh',
-      display: 'grid',
-      gridTemplateColumns: '300px 1fr',
-      background: '#000'
+      display: 'flex',
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
     }}>
-      {/* 左側: Webカメラ */}
-      <div style={{
-        background: '#1a1a1a',
+      {/* 左側：情報・プレビューエリア */}
+    <div 
+      style={{
+        width: '300px', 
         padding: '20px',
         display: 'flex',
         flexDirection: 'column',
-        alignItems: 'center'
-      }}>
-        <h3 style={{ color: 'white', marginTop: 0 }}>Webカメラ</h3>
+        gap: '20px',
+      }}
+    >
+        {/* Webカメラ */}
+        <div style={{
+          background: 'rgba(255, 255, 255, 0.15)',
+          borderRadius: '16px',
+          padding: '16px',
+          border: '1px solid rgba(255, 255, 255, 0.2)'
+        }}>
+          <h3 style={{ margin: '0 0 12px 0', color: 'white', fontSize: '16px', textAlign: 'center' }}>
+            Webカメラ
+          </h3>
+          <div style={{
+            width: '100%',
+            height: '150px',
+            background: '#000',
+            borderRadius: '12px',
+            overflow: 'hidden',
+            position: 'relative'
+          }}>
         <video
           ref={videoRef}
           autoPlay
           muted
           style={{
             width: '100%',
-            maxWidth: '260px',
-            borderRadius: '8px',
-            border: '2px solid #333'
+            height: '100%',
+            objectFit: 'cover'
           }}
         />
+          </div>
+        </div>
         
         {/* 経過時間 */}
         <div style={{
-          marginTop: '20px',
-          padding: '15px',
-          background: '#333',
-          borderRadius: '8px',
-          textAlign: 'center',
-          width: '100%'
+          background: 'rgba(255, 255, 255, 0.15)',
+          borderRadius: '16px',
+          padding: '20px',
+          border: '1px solid rgba(255, 255, 255, 0.2)',
+          textAlign: 'center'
         }}>
-          <div style={{ color: '#ccc', fontSize: '14px' }}>経過時間</div>
-          <div style={{ color: 'white', fontSize: '24px', fontWeight: 'bold' }}>
+          <h3 style={{ margin: '0 0 8px 0', color: 'white', fontSize: '16px' }}>
+            経過時間
+          </h3>
+          <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'white', fontFamily: 'monospace' }}>
             {formatTime(elapsedTime)}
           </div>
+          <div style={{ fontSize: '12px', color: 'rgba(255, 255, 255, 0.7)', marginTop: '8px' }}>
+            次の休憩まで: {formatTime(Math.max(0, nextBreakTime - elapsedTime))}
+          </div>
         </div>
 
-        {/* 次の休憩まで（シンプル表示） */}
+        {/* --- 教材表示 --- */}
         <div style={{
-          marginTop: '10px',
-          padding: '15px',
-          background: '#444',
-          borderRadius: '8px',
-          textAlign: 'center',
-          width: '100%'
+            background: 'rgba(255, 255, 255, 0.15)',
+            borderRadius: '16px',
+            padding: '16px',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden'
         }}>
-          <div style={{ color: '#ccc', fontSize: '14px' }}>次の休憩まで</div>
-          <div style={{ color: '#4ecdc4', fontSize: '18px', fontWeight: 'bold' }}>
-            {formatTime(Math.max(0, nextBreakTime - elapsedTime))}
-          </div>
-        </div>
-
-        {/* ボタンエリア */}
-        <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {/* スクリーンキャプチャ状況表示 */}
-          <div style={{
-            padding: '10px',
-            background: savedDisplayStream ? 'rgba(40, 167, 69, 0.2)' : 'rgba(255, 193, 7, 0.2)',
-            borderRadius: '6px',
-            border: `1px solid ${savedDisplayStream ? '#28a745' : '#ffc107'}`,
-            fontSize: '12px',
-            textAlign: 'center'
-          }}>
-            {savedDisplayStream ? '🟢 画面キャプチャ準備完了' : '🟡 初回のみ画面選択が必要'}
-          </div>
-
-          {/* 手動休憩ボタン */}
-          <button
-            onClick={handleBreakTransition}
-            style={{
-              padding: '12px 24px',
-              background: '#17a2b8',
-              color: 'white',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              fontSize: '16px',
-              width: '100%'
-            }}
-          >
-            📸 休憩（自動スクショ）
-          </button>
-          
-          {/* 中断ボタン */}
-          <button
-            onClick={handleInterrupt}
-            style={{
-              padding: '12px 24px',
-              background: '#dc3545',
-              color: 'white',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              fontSize: '16px',
-              width: '100%'
-            }}
-          >
-            中断
-          </button>
+            <h3 style={{ margin: '0 0 12px 0', color: 'white', fontSize: '16px', flexShrink: 0 }}>
+                教材表示
+            </h3>
+            <div style={{ flex: 1, overflow: 'auto', background: 'rgba(0,0,0,0.2)', borderRadius: '12px', padding: '12px', color: 'white' }}>
+                {isContentLoading ? (
+                    <p>読み込み中...</p>
+                ) : selectedMaterial?.type === 'image' && selectedMaterial.downloadURL ? (
+                    <img src={selectedMaterial.downloadURL} alt={selectedMaterial.name} style={{ width: '100%', height: 'auto', borderRadius: '8px' }} />
+                ) : selectedMaterial?.type === 'text' ? (
+                    <pre style={{ fontSize: '12px', color: 'white', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
+                        {textContent}
+                    </pre>
+                ) : (
+                    <p style={{ color: 'rgba(255,255,255,0.7)', textAlign: 'center', marginTop: '20px' }}>
+                        ファイルを選択するとここに内容が表示されます。
+                    </p>
+                )}
+            </div>
         </div>
       </div>
 
-      {/* 右側: StudyAnimation */}
-      <div style={{ position: 'relative' }}>
-        <StudyAnimation />
+      {/* 右側：StudyAnimationエリア */}
+      <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+        <StudyAnimation selectedMaterial={selectedMaterial} />
         
-        {/* 学習内容表示 */}
-        <div style={{
-          position: 'absolute',
-          top: '20px',
-          left: '20px',
-          background: 'rgba(0,0,0,0.7)',
-          color: 'white',
-          padding: '15px',
-          borderRadius: '8px',
-          maxWidth: '300px'
-        }}>
-          <div style={{ fontSize: '14px', opacity: 0.8 }}>学習中</div>
-          <div style={{ fontSize: '18px', fontWeight: 'bold' }}>
-            {settings.studyContent || '学習内容未設定'}
+        {/* --- 左下：教材選択ナビゲーション (修正) --- */}
+        <div 
+            ref={interactionPanelRef}
+            style={{
+                position: 'absolute',
+                bottom: '20px',
+                left: '20px', // ★ rightからleftに変更
+                width: '300px',
+                height: '45%',
+                zIndex: 10,
+                background: 'rgba(255, 255, 255, 0.1)',
+                backdropFilter: 'blur(10px)',
+                borderRadius: '16px',
+                padding: '16px',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+                touchAction: 'none',
+                userSelect: 'none'
+            }}
+        >
+          <h3 style={{ margin: '0 0 12px 0', color: 'white', fontSize: '16px', flexShrink: 0 }}>
+            教材選択 
+            <span style={{ fontSize: '12px', opacity: 0.7 }}> (フリックで操作)</span>
+          </h3>
+          
+          <div style={{ marginBottom: '12px', fontSize: '12px', color: 'white', wordBreak: 'break-all', flexShrink: 0 }}>
+            📍 {breadcrumbs.length > 0 ? breadcrumbs.map(folder => folder.name).join(' / ') : 'ルート'}
           </div>
-          {settings.motivationalMessage && (
-            <div style={{ fontSize: '14px', marginTop: '8px', fontStyle: 'italic' }}>
-              "{settings.motivationalMessage}"
+
+          <div style={{ marginBottom: '8px', flexShrink: 0, background: 'rgba(255, 255, 255, 0.08)', borderRadius: '8px', padding: '12px', fontSize: '11px', color: 'rgba(255, 255, 255, 0.8)', lineHeight: '1.4' }}>
+            <div style={{ fontWeight: '600' }}>📱 操作方法</div>
+            <div>↔️ 左右: 項目選択</div>
+            <div>⬆️ 上: 親フォルダへ</div>
+            <div>⬇️ 下: フォルダを開く</div>
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', paddingRight: '5px' }}>
+              {currentItems.length > 0 ? (
+                currentItems.map((item, index) => (
+                  <div key={item.id} style={{ padding: '8px 12px', background: index === currentItemIndex ? 'rgba(59, 130, 246, 0.3)' : 'rgba(255, 255, 255, 0.05)', border: `2px solid ${index === currentItemIndex ? 'rgba(59, 130, 246, 0.6)' : 'transparent'}`, borderRadius: '12px', marginBottom: '8px', transition: 'all 0.2s ease-in-out', transform: index === currentItemIndex ? 'scale(1.02)' : 'scale(1)', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ fontSize: '20px' }}>{'parentId' in item ? '📁' : (item.type === 'text' ? '📄' : '🖼️')}</span>
+                    <span style={{ color: 'white', fontWeight: '500', fontSize: '14px' }}>{item.name}</span>
+                  </div>
+                ))
+              ) : (
+                <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.7)', paddingTop: '20px' }}><div style={{ fontSize: '32px', opacity: 0.5 }}>🗂️</div><p>空のフォルダ</p></div>
+              )}
             </div>
-          )}
         </div>
+        
+        <div style={{ position: 'absolute', top: '20px', right: '20px', zIndex: 10 }}>
+          <button onClick={handleBreak} style={{ padding: '12px 24px', background: 'rgba(255, 255, 255, 0.2)', color: 'white', border: '1px solid rgba(255, 255, 255, 0.3)', borderRadius: '16px', cursor: 'pointer', fontSize: '14px', fontWeight: '600', backdropFilter: 'blur(10px)', transition: 'all 0.3s ease' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)'; e.currentTarget.style.transform = 'translateY(-2px)' }} onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)'; e.currentTarget.style.transform = 'translateY(0)' }}>
+            休憩に入る
+          </button>
+        </div>
+        
       </div>
     </div>
   )
 }
+

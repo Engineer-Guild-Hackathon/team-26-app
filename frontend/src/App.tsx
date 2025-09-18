@@ -3,6 +3,7 @@ import Home from './pages/Home'
 import StudySettings from './pages/StudySettings'
 import Study from './pages/Study'
 import Break from './pages/Break'
+import Materials from './pages/Materials'
 import './App.css'
 
 function App() {
@@ -14,6 +15,7 @@ function App() {
           <Route path="/study-settings" element={<StudySettings />} />
           <Route path="/study" element={<Study />} />
           <Route path="/break" element={<Break />} />
+          <Route path="/materials" element={<Materials />} />
         </Routes>
       </div>
     </Router>
