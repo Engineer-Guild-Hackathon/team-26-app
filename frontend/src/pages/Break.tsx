@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import TalkAnimation from '../components/TalkAnimation'
 import { type MaterialFolder, type MaterialFile, firebaseMaterialsService } from 'src/services/firebaseMaterials'
 
+
 // CSS for animations and styling
 const styles = `
   @keyframes pulse {
@@ -17,15 +18,18 @@ const styles = `
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
+
 `
 if (typeof document !== 'undefined') {
-  const styleElement = document.createElement('style')
-  styleElement.textContent = styles
-  document.head.appendChild(styleElement)
+ const styleElement = document.createElement('style')
+ styleElement.textContent = styles
+ document.head.appendChild(styleElement)
 }
+
 
 // WebRTC Realtime AI Client
 class WebRTCRealtimeClient {
+
   private pc: RTCPeerConnection | null = null
   private dataChannel: RTCDataChannel | null = null
   private mediaStream: MediaStream | null = null
@@ -1478,4 +1482,3 @@ export default function Break() {
       </div>
     </div>
   )
-}

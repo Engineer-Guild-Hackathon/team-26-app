@@ -40,13 +40,16 @@ const studyRoutes = require('./routes/study');
 const aiRoutes = require('./routes/ai');
 const userRoutes = require('./routes/user');
 const sessionRoutes = require('./routes/session');
+
 const firebaseMaterialsRoutes = require('./routes/firebase-materials');
 const firebaseTestRoutes = require('./routes/firebase-test');
+
 
 // API ルート
 app.use('/api/study', studyRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/materials', materialsRoutes);
 app.use('/session', sessionRoutes);
 app.use('/api/firebase-materials', firebaseMaterialsRoutes);
 app.use('/api/firebase-test', firebaseTestRoutes);
@@ -59,7 +62,8 @@ app.get("/", (req, res) => {
     endpoints: [
       "/api/study/*",
       "/api/ai/*", 
-      "/api/user/*"
+      "/api/user/*",
+      "/api/materials/*"
     ]
   });
 });

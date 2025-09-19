@@ -9,6 +9,7 @@ const OPTIMAL_CAMERA_POSITION = {
   target: new THREE.Vector3(0, 2.3, 0),
 };
 
+
 /**
  * 3Dモデルを読み込み、"Study"アニメーションを再生するコンポーネント
  */
@@ -102,12 +103,14 @@ function MaterialDisplay({ selectedMaterial, textContent }: { selectedMaterial: 
   return null;
 }
 
+
 interface StudyAnimationProps {
   selectedMaterial: any;
   textContent: string | null;
 }
-
+  
 export default function StudyAnimation({ selectedMaterial, textContent }: StudyAnimationProps) {
+
   return (
     // ★ styleのタイポを修正 (width: '100%')
     <div style={{ width: '100%', height: '100vh', background: 'transparent' }}>
@@ -127,7 +130,7 @@ export default function StudyAnimation({ selectedMaterial, textContent }: StudyA
           <AnimatedModel />
           <MaterialDisplay selectedMaterial={selectedMaterial} textContent={textContent} />
         </Suspense>
-        
+
         <gridHelper args={[20, 20]} />
       </Canvas>
     </div>

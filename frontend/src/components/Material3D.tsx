@@ -38,7 +38,6 @@ export default function Material3D({ selectedMaterial, position = [1.5, 1.2, 1.0
           <planeGeometry args={[2.1, 1.6]} />
           <meshBasicMaterial color="#ffffff" transparent opacity={0.8} />
         </mesh>
-        
       </group>
     )
   }
@@ -70,7 +69,7 @@ export default function Material3D({ selectedMaterial, position = [1.5, 1.2, 1.0
         >
           {selectedMaterial.content?.substring(0, 100) + (selectedMaterial.content?.length > 100 ? '...' : '')}
         </Text>
-        
+
       </group>
     )
   }

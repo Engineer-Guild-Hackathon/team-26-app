@@ -294,6 +294,7 @@ export default function FileExplorer({
                     transition: 'all 0.3s ease',
                     backdropFilter: 'blur(10px)',
                     cursor: 'pointer'
+
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.background = 'rgba(255, 255, 255, 0.15)'

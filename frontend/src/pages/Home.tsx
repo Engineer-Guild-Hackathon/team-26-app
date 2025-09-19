@@ -48,7 +48,9 @@ const TargetIcon = () => (
 )
 
 const MaterialsIcon = () => (
+
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
     <polyline points="14,2 14,8 20,8"/>
     <line x1="16" y1="13" x2="8" y2="13"/>
@@ -197,6 +199,36 @@ export default function Home() {
               </button>
               {/* <button 
                 style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '12px 24px',
+                  background: 'rgba(255,255,255,0.2)',
+              color: 'white',
+                  border: '1px solid rgba(255,255,255,0.3)',
+                  borderRadius: '16px',
+              cursor: 'pointer',
+                  fontSize: '16px',
+                  fontWeight: '600',
+                  backdropFilter: 'blur(10px)',
+                  transition: 'all 0.3s ease',
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.1)'
+            }}
+            onClick={() => navigate('/materials')}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.3)'
+                  e.currentTarget.style.transform = 'translateY(-2px)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.2)'
+                  e.currentTarget.style.transform = 'translateY(0)'
+                }}
+              >
+                <MaterialsIcon />
+                教材管理
+          </button>
+          <button 
+            style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',

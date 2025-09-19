@@ -4,7 +4,9 @@ import StudySettings from './pages/StudySettings'
 import Study from './pages/Study'
 import Break from './pages/Break'
 import Materials from './pages/Materials'
+
 import { useSecurityRestrictions } from './hooks/useSecurityRestrictions'
+
 import './App.css'
 
 function AppContent() {

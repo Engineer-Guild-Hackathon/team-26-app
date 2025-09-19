@@ -5,9 +5,11 @@ import FileExplorer from '../components/FileExplorer'
 
 // アイコンコンポーネント
 const BackIcon = () => (
+
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="5">
     <path d="m9 19-7-7 7-7"/>
     <path d="M28 12H5"/>
+
   </svg>
 )
 
@@ -24,7 +26,6 @@ const UploadIcon = () => (
     <line x1="12" y1="15" x2="12" y2="3"/>
   </svg>
 )
-
 
 const TrashIcon = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -46,12 +47,13 @@ export default function Materials() {
   const [newFolderName, setNewFolderName] = useState('')
   const [createFolderParentId, setCreateFolderParentId] = useState<string | null>(null)
   
+
   // ファイル表示オーバーレイ関連
   const [showFileOverlay, setShowFileOverlay] = useState(false)
   const [overlayFile, setOverlayFile] = useState<MaterialFile | null>(null)
   const [overlayContent, setOverlayContent] = useState<string>('')
   const [isLoadingOverlay, setIsLoadingOverlay] = useState(false)
-  
+
   // ファイル管理
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [selectedFolder, setSelectedFolder] = useState<string>('')
@@ -64,7 +66,9 @@ export default function Materials() {
   // 初期化
   useEffect(() => {
     fetchAllFolders()
+
     fetchFiles(undefined) // ルートフォルダのファイル
+
   }, [])
 
   // 全フォルダ取得（階層表示用）
@@ -111,6 +115,7 @@ export default function Materials() {
 
   // ファイル一覧取得
   const fetchFiles = async (folderId: string | null | undefined) => {
+
     if (!folderId) {
       setFiles([])
       return
@@ -134,6 +139,7 @@ export default function Materials() {
       const newFolder = await firebaseMaterialsService.createFolder(
         newFolderName.trim(), 
         createFolderParentId || undefined
+
       )
       
       // リアルタイムでフォルダ追加
@@ -227,6 +233,7 @@ export default function Materials() {
       setLoading(true)
       await firebaseMaterialsService.deleteFile(file.id)
       fetchFiles(currentFolder?.id || undefined)
+
     } catch (error) {
       console.error('ファイル削除エラー:', error)
       alert('ファイル削除に失敗しました')
@@ -241,6 +248,7 @@ export default function Materials() {
     setSelectedFolder(folder.id)
     fetchFiles(folder.id)
   }
+
 
   // ファイルクリック（オーバーレイ表示）
   const handleFileClick = async (file: MaterialFile) => {
@@ -612,6 +620,7 @@ export default function Materials() {
                             outline: 'none',
                             boxSizing: 'border-box',
                             maxWidth: '100%'
+
                           }}
                         />
                         <button
@@ -777,6 +786,7 @@ export default function Materials() {
         </div>
       </div>
 
+
       {/* ファイル内容表示オーバーレイ */}
       {showFileOverlay && overlayFile && (
         <div style={{
@@ -937,6 +947,7 @@ export default function Materials() {
           100% { transform: rotate(360deg); }
         }
       `}</style>
+
     </div>
   )
 }
