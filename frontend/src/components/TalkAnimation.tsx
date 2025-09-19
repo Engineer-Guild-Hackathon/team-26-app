@@ -3,10 +3,11 @@ import { Canvas, useFrame } from '@react-three/fiber'
 import { useGLTF } from '@react-three/drei'
 import * as THREE from 'three'
 import { OPTIMAL_CAMERA_POSITION } from '../constants/cameraPositions'
+import Material3D from './Material3D'
 
 function AnimatedModel() {
   const { scene, animations } = useGLTF('/udemy_test.glb')
-  const mixer = useRef<THREE.AnimationMixer>()
+  const mixer = useRef<THREE.AnimationMixer | null>(null)
 
   useEffect(() => {
     if (scene && animations) {
@@ -21,7 +22,7 @@ function AnimatedModel() {
     }
   }, [scene, animations])
 
-  useFrame((state, delta) => {
+  useFrame((_, delta) => {
     if (mixer.current) {
       mixer.current.update(delta)
     }
@@ -30,11 +31,14 @@ function AnimatedModel() {
   return <primitive object={scene} />
 }
 
+// 3D教材表示コンポーネント（TalkAnimation用）
+
 interface TalkAnimationProps {
   className?: string
+  selectedMaterial?: any
 }
 
-export default function TalkAnimation({ className }: TalkAnimationProps) {
+export default function TalkAnimation({ className, selectedMaterial }: TalkAnimationProps) {
   return (
     <div className={className} style={{ width: '100%', height: '100%' }}>
       <Canvas 
@@ -59,6 +63,13 @@ export default function TalkAnimation({ className }: TalkAnimationProps) {
         <pointLight position={[-10, -10, -5]} intensity={0.5} />
         
         <AnimatedModel />
+        
+        {/* 3D教材表示 */}
+        <Material3D selectedMaterial={selectedMaterial} position={[0, 0, 0]} />
+        
+        {/* グリッドヘルパー */}
+        <gridHelper args={[20, 20]} />
+        <axesHelper args={[5]} />
       </Canvas>
     </div>
   )

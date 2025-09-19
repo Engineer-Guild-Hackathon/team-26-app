@@ -3,9 +3,9 @@ import { useNavigate } from 'react-router-dom'
 
 // アイコンコンポーネント
 const BackIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <path d="m12 19-7-7 7-7"/>
-    <path d="M19 12H5"/>
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="5">
+    <path d="m9 19-7-7 7-7"/>
+    <path d="M28 12H5"/>
   </svg>
 )
 
@@ -335,7 +335,7 @@ export default function StudySettings() {
               <textarea
                 value={motivationalMessage}
                 onChange={(e) => setMotivationalMessage(e.target.value)}
-                placeholder="今日は頑張るぞ！💪"
+                placeholder="今日は頑張るぞ！"
                 rows={3}
                 style={{
                   width: '100%',

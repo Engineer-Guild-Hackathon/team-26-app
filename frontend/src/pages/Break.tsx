@@ -1,17 +1,23 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import TalkAnimation from '../components/TalkAnimation'
+import { type MaterialFolder, type MaterialFile, firebaseMaterialsService } from 'src/services/firebaseMaterials'
 
-// CSS animations for speaking indicator
+// CSS for animations and styling
 const styles = `
   @keyframes pulse {
-    0% { opacity: 1; }
-    50% { opacity: 0.3; }
-    100% { opacity: 1; }
+    0% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.9); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
 `
-
-// Inject styles into head
 if (typeof document !== 'undefined') {
   const styleElement = document.createElement('style')
   styleElement.textContent = styles
@@ -26,10 +32,11 @@ class WebRTCRealtimeClient {
   private onMessage: (message: any) => void
   // private onAudioResponse: (audioData: string) => void - 現在未使用
   // private breakId: string - 現在未使用
-  private isSending: boolean = false // 送信状態管理
-  private isResponseActive: boolean = false // レスポンス状態管理
+  public isSending: boolean = false // 送信状態管理
+  public isResponseActive: boolean = false // レスポンス状態管理
+  public isCreatingItem: boolean = false // アイテム作成状態管理
 
-  constructor(breakId: string, onMessage: (message: any) => void, _onAudioResponse: (audioData: string) => void) {
+  constructor(_breakId: string, onMessage: (message: any) => void, _onAudioResponse: (audioData: string) => void) {
     // this.breakId = breakId - 現在未使用
     this.onMessage = onMessage
     // this.onAudioResponse = _onAudioResponse - 現在未使用
@@ -55,6 +62,12 @@ class WebRTCRealtimeClient {
 
       // 2. RTCPeerConnection作成
       this.pc = new RTCPeerConnection()
+      
+      // セキュリティ制限のためにWebRTC接続を登録
+      if (!(window as any).webrtcConnections) {
+        (window as any).webrtcConnections = [];
+      }
+      (window as any).webrtcConnections.push(this.pc);
 
       // 3. マイク音声を取得
       this.mediaStream = await navigator.mediaDevices.getUserMedia({ 
@@ -144,32 +157,12 @@ class WebRTCRealtimeClient {
 - 短めの返答（1-2文程度）
 - 絵文字を適度に使用
 
-【重要】2つの画像を必ず両方分析してコメントしてください：
-1. ウェブカメラ画像 = 今のユーザの状態（表情、疲れ具合など）
-2. スクリーンショット = ユーザが勉強している画面内容（最重要！）
-
-スクリーンショット（勉強画面）の実際の内容を正確に見て分析してください：
-- 画面に何が映っているかを正確に判断
-- 勉強系なら具体的に何を学習しているか
-- 遊び系なら何をしているか
-- 文字やアイコンを読み取って判断
-
-反応例（画面内容に応じて適切に使い分け）：
-- 勉強画面 → 「頑張ってるじゃん！」「その問題難しそう〜」
-- プログラミング → 「コード書いてるの？むずそう〜」
-- 動画サイト → 「あれ、動画見てない？」
-- ゲーム → 「おい、ゲームしてるじゃん笑」
-- SNS → 「また携帯いじってる〜」
-
-実際の画面内容に基づいて正確にコメントしてください。`,
+教材についてフランクに話し、学習者を励ましてください。`,
         },
       }
       this.dataChannel!.send(JSON.stringify(sessionUpdate))
 
-      // DataChannel接続後に画像分析を実行
-    setTimeout(() => {
-        this.onMessage({ type: 'dataChannel_ready', message: 'DataChannel準備完了' })
-    }, 1000)
+      this.onMessage({ type: 'connected' })
     })
 
     this.dataChannel.addEventListener("message", (event) => {
@@ -212,9 +205,15 @@ class WebRTCRealtimeClient {
         this.onMessage({ type: 'ai_audio_done', message: '🔊 音声応答完了' })
         break
 
+      case "conversation.item.created":
+        console.log("Conversation item created:", data.item?.type)
+        this.isCreatingItem = true // アイテム作成中
+        break
+
       case "response.created":
-        console.log("Response started")
+        console.log("Response started - Setting isResponseActive = true")
         this.isResponseActive = true // レスポンス開始
+        this.isCreatingItem = false // レスポンス開始時はアイテム作成完了
         this.onMessage({ type: 'ai_response_started', message: '🤖 AI応答開始...' })
         break
 
@@ -245,9 +244,11 @@ class WebRTCRealtimeClient {
         break
 
       case "response.done":
-        console.log("Response completed")
+        console.log("Response completed - Setting isResponseActive = false")
         this.isResponseActive = false // レスポンス完了
         this.isSending = false // 送信状態もリセット
+        this.isCreatingItem = false // アイテム作成もリセット
+        console.log('✅ AI応答完了 - 次の送信準備完了')
         
         if (data.response && data.response.status === 'failed') {
           console.error("🚨 Response failed:", data.response.status_details)
@@ -262,6 +263,9 @@ class WebRTCRealtimeClient {
 
       case "error":
         console.error("OpenAI API error:", data.error)
+        this.isResponseActive = false // エラー時も応答状態をリセット
+        this.isSending = false // 送信状態もリセット
+        this.isCreatingItem = false // アイテム作成状態もリセット
         this.onMessage({ type: 'error', message: `⚠️ エラー: ${data.error.message}` })
         break
     }
@@ -290,30 +294,20 @@ class WebRTCRealtimeClient {
     }).catch(console.error)
   }
 
-  // 画像圧縮関数（実際の画像処理版）
-  private async compressImage(dataUrl: string, maxSizeKB: number = 200): Promise<string> {
-    try {
-      const originalSizeKB = (dataUrl.length * 0.75) / 1024
-      console.log(`🖼️ 画像圧縮開始: ${originalSizeKB.toFixed(2)}KB → 目標: ${maxSizeKB}KB`)
-      
-      // 目標サイズ以下なら無加工で返す
-      if (originalSizeKB <= maxSizeKB) {
-        console.log('✅ 圧縮不要（目標サイズ以下）')
-        return dataUrl
-      }
-      
-      return new Promise<string>((resolve) => {
+  // 画像圧縮関数（Blob版）
+  private async compressImageBlob(blob: Blob, maxSizeKB: number): Promise<string> {
+    return new Promise((resolve, reject) => {
         const img = new Image()
         img.onload = () => {
           const canvas = document.createElement('canvas')
           const ctx = canvas.getContext('2d')
           if (!ctx) {
-            resolve(dataUrl)
+          reject(new Error('Canvas context not available'))
             return
           }
           
-          // 高品質を保ちつつ適度に縮小
-          const maxDimension = maxSizeKB > 150 ? 800 : 600
+        // 適度に縮小（maxSizeKBに応じてサイズ調整）
+        const maxDimension = maxSizeKB > 80 ? 600 : 400
           let { width, height } = img
           
           if (width > height) {
@@ -331,210 +325,205 @@ class WebRTCRealtimeClient {
           canvas.width = Math.round(width)
           canvas.height = Math.round(height)
           
-          // 高品質レンダリング設定
+        // 高品質レンダリング
           ctx.imageSmoothingEnabled = true
           ctx.imageSmoothingQuality = 'high'
-          
-          // 画像を描画
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
           
-          // 高品質JPEG（90-95%品質）
-          let quality = 0.92
+        // 品質を段階的に下げて調整
+        let quality = 0.85
           let compressed = canvas.toDataURL('image/jpeg', quality)
           let compressedSizeKB = (compressed.length * 0.75) / 1024
           
-          // 品質を段階的に下げて調整
-          while (compressedSizeKB > maxSizeKB && quality > 0.7) {
+        while (compressedSizeKB > maxSizeKB && quality > 0.5) {
             quality -= 0.05
             compressed = canvas.toDataURL('image/jpeg', quality)
             compressedSizeKB = (compressed.length * 0.75) / 1024
           }
           
-          console.log(`✅ 圧縮完了: ${compressedSizeKB.toFixed(2)}KB (品質: ${(quality * 100).toFixed(0)}%)`)
           resolve(compressed)
         }
         
-        img.onerror = () => {
-          console.warn('⚠️ 画像読み込み失敗、元画像を返します')
-          resolve(dataUrl)
-        }
-        
-        img.src = dataUrl
-      }).catch(() => dataUrl) // Promise エラー時も元画像を返す
-      
-    } catch (error) {
-      console.error('画像圧縮エラー:', error)
-      
-      // エラー時は極小サイズの代替画像を作成
-      try {
-        const canvas = document.createElement('canvas')
-        const ctx = canvas.getContext('2d')
-        if (ctx) {
-          canvas.width = maxSizeKB <= 10 ? 100 : 160
-          canvas.height = maxSizeKB <= 10 ? 75 : 120
-          ctx.fillStyle = '#f0f0f0'
-          ctx.fillRect(0, 0, canvas.width, canvas.height)
-          ctx.fillStyle = '#999'
-          ctx.font = '12px Arial'
-          ctx.fillText('Image Error', 10, canvas.height / 2)
-          return canvas.toDataURL('image/jpeg', 0.1)
-        }
-      } catch {}
-      
-      return dataUrl
-    }
+      img.onerror = () => reject(new Error('Image load failed'))
+      img.src = URL.createObjectURL(blob)
+    })
   }
 
-  // 画像分析（OpenAI Realtime API公式ドキュメント通り）
-  async sendImages(webcamPhoto: string, screenPhoto: string, studyContext: any) {
+  // 教材送信機能
+  async sendMaterial(material: MaterialFile, content?: string) {
     if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
       console.error('Data channel not open. State:', this.dataChannel?.readyState)
       return
     }
 
     if (this.isSending) {
-      console.warn('既に画像送信中です。重複送信を防止します。')
+      console.warn('既に送信中です。重複送信を防止します。')
       return
     }
 
     if (this.isResponseActive) {
-      console.warn('AI応答中です。応答完了後に再試行してください。')
+      console.warn(`⚠️ AI応答処理中です（isResponseActive=${this.isResponseActive}）。応答完了後に再試行してください。`)
+      return
+    }
+
+    if (this.isCreatingItem) {
+      console.warn(`⚠️ アイテム作成中です（isCreatingItem=${this.isCreatingItem}）。作成完了後に再試行してください。`)
       return
     }
 
     this.isSending = true
-    console.log('🖼️ 画像分析開始:', { 
-      webcamLength: webcamPhoto.length, 
-      screenLength: screenPhoto.length 
-    })
-    
-    // 圧縮なし試行（生画像品質）
-    console.log('🔍 圧縮なし試行開始...')
-    const webcamOriginalSize = (webcamPhoto.length * 0.75) / 1024
-    const screenOriginalSize = (screenPhoto.length * 0.75) / 1024
-    console.log(`📊 元画像サイズ: Webcam=${webcamOriginalSize.toFixed(2)}KB, Screen=${screenOriginalSize.toFixed(2)}KB`)
-    
-    // 高品質画像処理（非同期圧縮）
-    let webcamCompressed = webcamPhoto
-    let screenCompressed = screenPhoto
-    
-    // 制限を超える場合のみ圧縮（高品質維持）
-    if (webcamOriginalSize > 150) {
-      console.log('📷 Webcam画像を高品質圧縮中...')
-      webcamCompressed = await this.compressImage(webcamPhoto, 150)
-    }
-    
-    if (screenOriginalSize > 250) {
-      console.log('🖥️ Screen画像を高品質圧縮中...')  
-      screenCompressed = await this.compressImage(screenPhoto, 250)
-    }
+    this.isCreatingItem = false // 送信開始時にリセット
+    console.log(`📚 教材送信開始: ${material.name} (isResponseActive=${this.isResponseActive}, isSending=${this.isSending}, isCreatingItem=${this.isCreatingItem})`)
 
-    // 公式ドキュメント通りの形式でテキストメッセージ送信
+    try {
+      // セッション設定を更新して新しい会話を開始
+      console.log('🧹 セッション設定を更新します');
+      const sessionUpdate = {
+        type: "session.update",
+        session: {
+          modalities: ["text", "audio"],
+          instructions: "You are a friendly study partner. Please have a casual, encouraging conversation about the provided study material.",
+          voice: "alloy",
+          input_audio_format: "pcm16",
+          output_audio_format: "pcm16",
+          input_audio_transcription: {
+            model: "whisper-1"
+          },
+          turn_detection: {
+            type: "server_vad",
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 200
+          },
+          tools: [],
+          tool_choice: "none",
+          temperature: 0.8,
+          max_response_output_tokens: "inf"
+        }
+      };
+      this.dataChannel.send(JSON.stringify(sessionUpdate));
+      
+      // 少し待ってから教材を送信
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      if (material.type === 'text' && content) {
+        // テキスト教材の場合
     const textMessage = {
       type: "conversation.item.create",
-      previous_item_id: null,
       item: {
         type: "message",
         role: "user",
         content: [
           {
             type: "input_text",
-            text: studyContext?.isInitialConversation ? 
-              "こんにちは！休憩時間ですね✨ 以下の画像から学習状況を確認して、親しみやすく「どんな感じ？」「それ難しいよね〜」のような自然な話し方で声をかけてください。短めに2-3文で。" :
-              studyContext?.isRefreshAnalysis ?
-              "画面を更新しました📱 新しい学習状況を確認して、進捗やアドバイスをお願いします。短めに2-3文で。" :
-              "学習状況を分析して、具体的なアドバイスをください。"
+                text: `「${material.name}」について話そう！\n\n【内容】\n${content}`
+              }
+            ]
           }
-        ]
-      }
-    }
-
-    // ウェブカメラ画像送信（公式ドキュメント通り）
-    const webcamMessage = {
+        }
+        this.dataChannel.send(JSON.stringify(textMessage))
+        
+      } else if (material.type === 'image' && material.downloadURL) {
+        // 画像教材の場合：テキストと画像の両方を送信
+        const textMessage = {
       type: "conversation.item.create",
-      previous_item_id: null,
       item: {
         type: "message",
         role: "user",
         content: [
           {
-            type: "input_image",
-            image_url: webcamCompressed
+                type: "input_text",
+                text: `「${material.name}」という画像について話そう！`
+              }
+            ]
           }
-        ]
-      }
-    }
-
-    // スクリーン画像送信（公式ドキュメント通り）
-    const screenMessage = {
+        }
+        this.dataChannel.send(JSON.stringify(textMessage))
+        
+        // 画像をbase64に変換して送信
+        setTimeout(async () => {
+          try {
+            if (!material.downloadURL) {
+              console.error('❌ ダウンロードURLが見つかりません')
+              return
+            }
+            console.log('🖼️ 画像をbase64に変換中:', material.downloadURL)
+            const response = await fetch(material.downloadURL)
+            const blob = await response.blob()
+            
+            // 画像を圧縮してからBase64変換
+            const compressedBase64 = await this.compressImageBlob(blob, 100) // 100KB制限
+            console.log('✅ 圧縮済みBase64変換完了:', compressedBase64.substring(0, 100) + '...')
+            console.log('📊 圧縮後サイズ:', Math.round((compressedBase64.length * 0.75) / 1024), 'KB')
+            
+            const imageMessage = {
       type: "conversation.item.create", 
-      previous_item_id: null,
       item: {
         type: "message",
         role: "user",
         content: [
           {
             type: "input_image",
-            image_url: screenCompressed
-          }
-        ]
-      }
-    }
-
-    // 安全な送信関数
-    const sendSafeMessage = (message: any, label: string): boolean => {
-      if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
-        console.warn(`${label}: DataChannel not ready`)
-        return false
-      }
-      
-      const messageStr = JSON.stringify(message)
-      const sizeKB = (messageStr.length * 0.75) / 1024
-      
-      if (sizeKB > 500) { // 圧縮なし対応（制限を大幅緩和）
-        console.warn(`${label} 送信スキップ: ${sizeKB.toFixed(2)}KB (制限: 500KB)`)
-        return false
-      }
-      
-      try {
-        this.dataChannel.send(messageStr)
-        console.log(`${label} 送信成功: ${sizeKB.toFixed(2)}KB`)
-        return true
+                    image_url: compressedBase64
+                  }
+                ]
+              }
+            }
+            
+            // メッセージサイズをチェック
+            const messageStr = JSON.stringify(imageMessage)
+            const messageSizeKB = (messageStr.length * 0.75) / 1024
+            console.log('📦 メッセージサイズ:', messageSizeKB.toFixed(2), 'KB')
+            
+            if (messageSizeKB > 150) {
+              console.warn('⚠️ メッセージが大きすぎます:', messageSizeKB.toFixed(2), 'KB')
+              return
+            }
+            
+            this.dataChannel!.send(messageStr)
+            
       } catch (error) {
-        console.error(`${label} 送信エラー:`, error)
-        this.isSending = false // エラー時は状態リセット
-        return false
+            console.error('❌ 画像処理エラー:', error)
       }
+        }, 100)
     }
 
-    // 順次送信（エラー対応）
-    sendSafeMessage(textMessage, '📝 テキスト')
-
     setTimeout(() => {
-      sendSafeMessage(webcamMessage, '📸 ウェブカメラ')
-    }, 100)
-
-    setTimeout(() => {
-      sendSafeMessage(screenMessage, '🖥️ スクリーン')
+        const responseRequest = {
+          type: 'response.create',
+          response: {
+            modalities: ['text', 'audio']
+          }
+        }
+        this.dataChannel!.send(JSON.stringify(responseRequest))
+        this.isSending = false
     }, 200)
 
-    // 送信完了状態をリセット（バックエンドが自動応答するため、フロントは応答要求不要）
-    setTimeout(() => {
+    } catch (error) {
+      console.error('教材送信エラー:', error)
       this.isSending = false
-      console.log('🎤 画像送信完了：バックエンドで自動応答処理中...')
-    }, 100)
+    }
   }
 
   disconnect() {
     // 状態をリセット
     this.isSending = false
     this.isResponseActive = false
+    this.isCreatingItem = false
     
     if (this.dataChannel) {
       this.dataChannel.close()
       this.dataChannel = null
     }
     if (this.pc) {
+      // セキュリティ制限の登録から削除
+      const connections = (window as any).webrtcConnections || [];
+      const index = connections.indexOf(this.pc);
+      if (index > -1) {
+        connections.splice(index, 1);
+        console.log('🔒 WebRTC接続を登録から削除しました');
+      }
+      
       this.pc.close()
       this.pc = null
     }
@@ -547,926 +536,945 @@ class WebRTCRealtimeClient {
 
 export default function Break() {
   const navigate = useNavigate()
-  const [settings, setSettings] = useState<any>(null)
   const [breakElapsedTime, setBreakElapsedTime] = useState(0)
-  const [partialText, setPartialText] = useState('')
   const videoRef = useRef<HTMLVideoElement>(null)
   const [stream, setStream] = useState<MediaStream | null>(null)
-  const [capturedImages, setCapturedImages] = useState<{
-    webcamPhoto: string
-    screenPhoto: string
-    timestamp: string
-  } | null>(null)
   
   // WebRTC Realtime AI関連
   const [aiClient, setAiClient] = useState<WebRTCRealtimeClient | null>(null)
+  const aiClientRef = useRef<WebRTCRealtimeClient | null>(null)
   const [isAiConnected, setIsAiConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
-  const [isAISpeaking, setIsAISpeaking] = useState(false)
-  const [breakId, setBreakId] = useState<string>('')
-  const [hasInitialImageSent, setHasInitialImageSent] = useState(false) // 初回送信フラグ
+  const [isAiResponding, setIsAiResponding] = useState(false)
+  const [isSendingMaterial, setIsSendingMaterial] = useState(false)
+  const inactivityTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastActivityRef = useRef<number>(Date.now());
+  const resetInactivityTimerRef = useRef<(() => void) | undefined>(undefined);
+  const lastSendTimeRef = useRef<number>(0);
+  
+  // Toast通知の状態
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  
+  // 確認ダイアログの状態
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
 
-  // 休憩時間の計算（学習時間の1/5）
-  const breakDuration = settings ? Math.floor(settings.targetTime / 5 * 60) : 300 // デフォルト5分
+  // Toast表示関数のref
+  const showToastNotificationRef = useRef<((message: string) => void) | undefined>(undefined);
+  
+  // Toast表示関数
+  const showToastNotification = useCallback((message: string) => {
+    setToastMessage(message);
+    setShowToast(true);
+    setTimeout(() => {
+      setShowToast(false);
+    }, 4000); // 4秒後に非表示
+  }, []);
+  
+  // refに関数を保存
+  showToastNotificationRef.current = showToastNotification;
+
+  // Homeに戻る処理
+  const handleGoHome = useCallback(() => {
+    // AI接続を切断
+    if (aiClient && isAiConnected) {
+      console.log('🏠 Homeに戻るためAI接続を切断します');
+      aiClient.disconnect();
+      setAiClient(null);
+      setIsAiConnected(false);
+      setIsConnecting(false);
+    }
+    // タイマーもクリア
+    if (inactivityTimeoutRef.current) {
+      clearTimeout(inactivityTimeoutRef.current);
+      inactivityTimeoutRef.current = null;
+    }
+    navigate('/');
+  }, [aiClient, isAiConnected, navigate]);
+
+  // 教材選択関連の状態
+  const [allFolders, setAllFolders] = useState<MaterialFolder[]>([])
+  const [currentFolder, setCurrentFolder] = useState<MaterialFolder | null>(null)
+  const [files, setFiles] = useState<MaterialFile[]>([])
+  const [selectedMaterial, setSelectedMaterial] = useState<MaterialFile | null>(null)
+  const [breadcrumbs, setBreadcrumbs] = useState<MaterialFolder[]>([])
+  const [_textContent, setTextContent] = useState<string | null>(null)
+  const [_isContentLoading, setIsContentLoading] = useState(false)
+  
+  const [currentItemIndex, setCurrentItemIndex] = useState(0)
+  const [currentItems, setCurrentItems] = useState<(MaterialFolder | MaterialFile)[]>([])
+  const interactionPanelRef = useRef<HTMLDivElement>(null); 
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
 
-  // AI応答のメッセージハンドラ（WebRTC対応）
-  const handleAiMessage = async (message: any) => {
-    console.log('AI message:', message)
+  // 30秒無活動タイマーをリセット
+  const resetInactivityTimer = useCallback(() => {
+    console.log('⏱️ 30秒タイマー開始');
     
-    switch (message.type) {
-      case 'connected':
-      setIsAiConnected(true)
-        setIsConnecting(false)
-        break
-        
-      case 'user_transcription':
-        // 文字起こし処理（ログなし）
-        break
-        
-      case 'ai_response_started':
-        setIsAISpeaking(true)
-        break
-        
-      case 'ai_text_delta':
-        setPartialText(prev => prev + message.content)
-        break
-        
-      case 'ai_text_done':
-        setPartialText('')
-        break
-        
-      case 'ai_audio_done':
-        setIsAISpeaking(false)
-        break
-        
-      case 'ai_response_done':
-        setIsAISpeaking(false)
-        break
-        
-      case 'error':
-        setIsConnecting(false)
-      setIsAiConnected(false)
-        break
-        
-      case 'disconnected':
-      setIsAiConnected(false)
-        setIsConnecting(false)
-        break
+    if (inactivityTimeoutRef.current) {
+      clearTimeout(inactivityTimeoutRef.current);
+    }
+    
+    inactivityTimeoutRef.current = setTimeout(() => {
+      console.log('💤 30秒経過 - 自動切断します');
+      
+      // ユーザーへのtoast通知
+      showToastNotificationRef.current?.('デモ用なので短時間で停止させてます。ごめんなさい🙇‍♂️');
+      
+      // aiClientをrefから参照
+      if (aiClientRef.current) {
+        aiClientRef.current.disconnect();
+        setAiClient(null);
+        setIsAiConnected(false);
+        setIsConnecting(false);
+        setIsAiResponding(false);
+      }
+    }, 30000); // 30秒
+  }, []); // 依存関係を空にして関数の再作成を防ぐ
+  
+  // resetInactivityTimerをrefに格納
+  useEffect(() => {
+    resetInactivityTimerRef.current = resetInactivityTimer;
+  });
 
-      case 'dataChannel_ready':
-        // DataChannel準備完了：Break画面で直接リアルタイム撮影して送信
-        console.log('📡 DataChannel準備完了イベント受信', {
-          settings: !!settings,
-          hasInitialImageSent,
-          aiClient: !!aiClient,
-          settingsContent: settings ? `${settings.studyContent}` : 'null'
-        })
+  // aiClientRefを同期
+  useEffect(() => {
+    console.log('🔄 aiClientRef更新:', { aiClient: !!aiClient });
+    aiClientRef.current = aiClient;
+  }, [aiClient]);
+
+  const handleAiMessage = useCallback((data: any) => {
+    // 活動があったことを記録
+    lastActivityRef.current = Date.now();
+    
+    switch (data.type) {
+      case 'connected': 
+        setIsAiConnected(true); 
+        setIsConnecting(false);
+        // AI接続完了時にタイマー開始
+        console.log('🔌 AI接続完了 - 30秒タイマー開始');
+        resetInactivityTimerRef.current?.();
+        break;
+      case 'disconnected': 
+        console.log('🔌 AI切断 - 全状態をリセットします');
+        setIsAiConnected(false); 
+        setIsConnecting(false);
+        setIsAiResponding(false);
+        setIsSendingMaterial(false);
         
-        // DataChannel準備完了をマーク
-        setIsAiConnected(true)
-        
-        // settingsが既にロードされている場合は即座に実行
-        if (settings && !hasInitialImageSent) {
-          console.log('🚀 DataChannel準備完了: Break画面で直接スクリーンショット撮影開始')
-          setHasInitialImageSent(true) // 初回送信済みマーク
-          
-          // 初回専用撮影（isAiConnectedチェックなし）
-          console.log('📸 handleInitialScreenCapture() 実行開始...')
-          handleInitialScreenCapture()
-        } else {
-          console.log('⏭️ DataChannel準備完了: 初回送信条件に合わず', {
-            settings: !!settings,
-            hasInitialImageSent,
-            reason: !settings ? 'settings not loaded - will retry when settings load' : 'already sent initial image'
-          })
+        // タイマーもクリア
+        if (inactivityTimeoutRef.current) {
+          clearTimeout(inactivityTimeoutRef.current);
+          inactivityTimeoutRef.current = null;
+          console.log('🧹 切断時にタイマーをクリアしました');
         }
-        break
         
-      default:
-        console.log('Unhandled message type:', message.type)
+        // デバウンス状態もリセット
+        lastSendTimeRef.current = 0;
+        break;
+      case 'response.created':
+        setIsAiResponding(true);
+        break;
+      case 'response.done':
+        setIsAiResponding(false);
+        break;
+      case 'response.text.delta':
+      case 'response.text.done':
+      case 'conversation.item.input_audio_transcription.completed':
+        // AI応答メッセージ（タイマーには影響しない）
+        break;
+      case "error":
+        // AI状態をリセット
+    if (aiClient) {
+          aiClient.isResponseActive = false;
+          aiClient.isSending = false;
+          aiClient.isCreatingItem = false;
+        }
+        setIsAiResponding(false);
+        setIsSendingMaterial(false); // 送信状態もリセット
+        console.error("AI Client Error:", data.error?.message || data.message || '不明なエラー');
+        setIsConnecting(false);
+        setIsAiConnected(false);
+        break;
     }
-  }
+  }, []); // resetInactivityTimerは依存関係から削除（関数は安定）
 
-  // AI音声応答ハンドラ
-  const handleAiAudio = (audioData: string) => {
-    // PCM16音声データの再生処理
-    console.log('AI音声データ受信:', audioData.length)
-    // TODO: 音声再生実装
-  }
-
-  // 設定読み込みと初期化（画像は直接Break画面で撮影）
+  // AI接続状態に応じて自動切断タイマーを管理
   useEffect(() => {
-    const savedSettings = localStorage.getItem('studySettings')
-    if (savedSettings) {
-      const parsedSettings = JSON.parse(savedSettings)
-      setSettings(parsedSettings)
-      console.log('⚙️ Settings読み込み完了:', {
-        studyContent: parsedSettings.studyContent,
-        startTime: parsedSettings.startTime,
-        targetTime: parsedSettings.targetTime
-      })
-    } else {
-      console.warn('⚠️ Settings not found in localStorage')
+    const now = new Date().toLocaleTimeString();
+    console.log(`🔧 [${now}] AI接続状態変更useEffect実行:`, { isAiConnected });
+    
+    if (!isAiConnected) {
+      console.log(`❌ [${now}] AI未接続 - タイマークリア`);
+      if (inactivityTimeoutRef.current) {
+        clearTimeout(inactivityTimeoutRef.current);
+        inactivityTimeoutRef.current = null;
+      }
     }
-    
-    // Study画面からの古い画像データをクリア
-    localStorage.removeItem('capturedImages')
-    console.log('🔄 Study画面の画像データをクリア - Break画面で直接撮影を実行')
-    
-    // breakIdを生成（タイムスタンプベース）
-    const generatedBreakId = `break_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-    setBreakId(generatedBreakId)
-  }, [])
+    // AI接続時はタイマー開始せず、教材送信時のみ開始
 
-  // settingsロード後の初回撮影トリガー
+    return () => {
+      const cleanupTime = new Date().toLocaleTimeString();
+      console.log(`🧹 [${cleanupTime}] useEffect cleanup実行`);
+      if (inactivityTimeoutRef.current) {
+        clearTimeout(inactivityTimeoutRef.current);
+      }
+    };
+  }, [isAiConnected]);
+
+  // 上記のuseEffectは削除（handleAiMessage内で直接resetInactivityTimerを呼ぶため）
+
+  const fetchAllFolders = useCallback(async () => {
+    try {
+      const rootFolders = await firebaseMaterialsService.getFolders();
+      let allFoldersData: MaterialFolder[] = [...rootFolders];
+      for (const folder of rootFolders) {
+        const childFolders = await loadChildFolders(folder.id, allFoldersData);
+        allFoldersData.push(...childFolders);
+      }
+      setAllFolders(allFoldersData);
+    } catch (error) { console.error('フォルダ取得エラー:', error); }
+  }, []);
+
+  const loadChildFolders = async (parentId: string, currentFolders: MaterialFolder[]): Promise<MaterialFolder[]> => {
+    try {
+      const childFolders = await firebaseMaterialsService.getChildFolders(parentId)
+      let allChildren: MaterialFolder[] = [...childFolders]
+      for (const child of childFolders) {
+        const grandChildren = await loadChildFolders(child.id, [...currentFolders, ...allChildren])
+        allChildren = [...allChildren, ...grandChildren]
+      }
+      return allChildren
+      } catch (error) {
+      console.error(`子フォルダ取得エラー (parentId: ${parentId}):`, error)
+      return []
+    }
+  };
+
+  const fetchFiles = useCallback(async (folderId: string | null) => {
+    try {
+      const filesData = folderId ? await firebaseMaterialsService.getFiles(folderId) : [];
+      setFiles(filesData);
+    } catch (error) { console.error('ファイル取得エラー:', error); setFiles([]); }
+  }, []);
+  
+  const generateBreadcrumbs = useCallback((folder: MaterialFolder | null) => {
+    if (!folder) { setBreadcrumbs([]); return; }
+    const newBreadcrumbs: MaterialFolder[] = [];
+    let currentItem: MaterialFolder | undefined = folder;
+    while (currentItem) {
+      newBreadcrumbs.unshift(currentItem);
+      currentItem = allFolders.find(f => f.id === currentItem?.parentId);
+    }
+    setBreadcrumbs(newBreadcrumbs);
+  }, [allFolders]);
+
+  const handleFolderClick = useCallback((folder: MaterialFolder) => {
+    setCurrentFolder(folder);
+    fetchFiles(folder.id);
+    generateBreadcrumbs(folder);
+  }, [allFolders, fetchFiles, generateBreadcrumbs]);
+
+  const handleNavigateToRoot = useCallback(() => {
+    setCurrentFolder(null);
+    fetchFiles(null);
+    setBreadcrumbs([]);
+  }, [fetchFiles]);
+
   useEffect(() => {
-    // settingsがロードされ、AI接続済み、かつ初回送信未完了の場合
-    if (settings && isAiConnected && !hasInitialImageSent && aiClient) {
-      console.log('⚙️ Settings + AI接続完了: 初回撮影を実行')
-      setHasInitialImageSent(true)
-      handleInitialScreenCapture()
+    fetchAllFolders();
+    const autoConnect = localStorage.getItem('shouldAutoConnectWebRTC');
+    if (autoConnect === 'true') {
+      console.log('🚀 自動接続フラグ検出 - AI接続を開始します');
+      localStorage.removeItem('shouldAutoConnectWebRTC');
+      setTimeout(() => startConnection(), 1000);
     }
-  }, [settings, isAiConnected, hasInitialImageSent, aiClient])
+  }, [fetchAllFolders]);
 
-  // WebRTC Realtime AI接続
-  const startConnection = async () => {
-    if (isConnecting || isAiConnected) return
+  useEffect(() => {
+    if (allFolders.length > 0 && !currentFolder) {
+      fetchFiles(null) 
+    }
+  }, [allFolders, currentFolder, fetchFiles]);
+
+  const startConnection = useCallback(async () => {
+    if (isConnecting || isAiConnected) return;
     
-    setIsConnecting(true)
-    const client = new WebRTCRealtimeClient(breakId, handleAiMessage, handleAiAudio)
-      setAiClient(client)
+    console.log('🔄 AI接続開始 - 状態をリセットします');
+    
+    // 状態を完全にリセット
+    setIsConnecting(true);
+    setIsAiResponding(false);
+    setIsSendingMaterial(false);
+    
+    // 既存のタイマーをクリア
+    if (inactivityTimeoutRef.current) {
+      clearTimeout(inactivityTimeoutRef.current);
+      inactivityTimeoutRef.current = null;
+      console.log('🧹 既存のタイマーをクリアしました');
+    }
+    
+    // デバウンス状態もリセット
+    lastSendTimeRef.current = 0;
+    
+    const client = new WebRTCRealtimeClient('break_session', handleAiMessage, () => {});
+    setAiClient(client);
+    try {
+      await client.connect();
+      } catch (error) {
+      console.error('Connection failed:', error);
+      setIsConnecting(false);
+    }
+  }, [isConnecting, isAiConnected, handleAiMessage]);
+
+  const sendMaterialToAI = useCallback(async () => {
+    console.log('🎯 sendMaterialToAI呼び出し開始');
+    
+    // デバウンス（2秒以内の重複クリックを防止）
+    const now = Date.now();
+    if (now - lastSendTimeRef.current < 2000) {
+      console.warn('🚫 デバウンス: 2秒以内の重複送信を防止しました');
+      return;
+    }
+    lastSendTimeRef.current = now;
+    
+    if (!selectedMaterial || !aiClient || !isAiConnected) {
+      console.warn('🚫 基本条件不満足', { selectedMaterial: !!selectedMaterial, aiClient: !!aiClient, isAiConnected });
+      return;
+    }
+    
+    // 送信中フラグをチェック
+    if (isSendingMaterial) {
+      console.warn('🚫 既に送信処理中です');
+      return;
+    }
+    
+    // AI応答中は送信を拒否
+    if (isAiResponding) {
+      console.warn('🚫 UI状態: AI応答中のため送信を拒否します');
+      return;
+    }
+    
+    // WebRTCクラス内の状態もチェック
+    if (aiClient.isResponseActive || aiClient.isSending || aiClient.isCreatingItem) {
+      console.warn(`🚫 WebRTC状態: 送信不可 (isResponseActive=${aiClient.isResponseActive}, isSending=${aiClient.isSending}, isCreatingItem=${aiClient.isCreatingItem})`);
+      return;
+    }
+    
+    console.log('✅ 送信前状態チェック完了 - 送信開始します');
+    
+    // 送信フラグを立てる
+    setIsSendingMaterial(true);
     
     try {
-      await client.connect()
+      // 活動があったことを記録
+      lastActivityRef.current = Date.now();
+      resetInactivityTimerRef.current?.();
       
-      // DataChannel接続待ちの処理は削除（DataChannelのopenイベントで実行）
-      
+      let materialContent = ''
+      if (selectedMaterial.type === 'text') {
+          try {
+              const content = await firebaseMaterialsService.getTextContent(selectedMaterial.id);
+              materialContent = content;
+          } catch (e) {
+              console.error("Failed to fetch text content for AI");
+          }
+      }
+
+      await aiClient.sendMaterial(selectedMaterial, materialContent);
+      console.log('✅ 教材送信完了');
     } catch (error) {
-      console.error('Connection failed:', error)
-      setIsConnecting(false)
+      console.error('❌ 教材送信エラー:', error);
+    } finally {
+      // 送信フラグをクリア
+      setIsSendingMaterial(false);
     }
-  }
+  }, [selectedMaterial, aiClient, isAiConnected, isAiResponding, isSendingMaterial]);
 
-  const stopConnection = () => {
-    if (aiClient) {
-      aiClient.disconnect()
-      setAiClient(null)
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    switch (e.key) {
+      case 'ArrowRight': e.preventDefault(); if (currentItems.length > 0) setCurrentItemIndex(i => (i + 1) % currentItems.length); break;
+      case 'ArrowLeft': e.preventDefault(); if (currentItems.length > 0) setCurrentItemIndex(i => (i - 1 + currentItems.length) % currentItems.length); break;
+      case 'ArrowUp': {
+        e.preventDefault();
+        const parent = currentFolder ? allFolders.find(f => f.id === currentFolder.parentId) : null;
+        if (parent) handleFolderClick(parent);
+        else if (currentFolder) handleNavigateToRoot();
+        break;
+      }
+      case 'ArrowDown': {
+        e.preventDefault();
+        const item = currentItems[currentItemIndex];
+        if (item && 'parentId' in item) handleFolderClick(item as MaterialFolder);
+        break;
+      }
     }
-      setIsAiConnected(false)
-    setIsConnecting(false)
-    setIsAISpeaking(false)
-    }
+  }, [currentItemIndex, currentItems, currentFolder, allFolders, handleFolderClick, handleNavigateToRoot]);
 
-  // 初期化時のbreakId生成
   useEffect(() => {
-    const generatedBreakId = `break_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-    setBreakId(generatedBreakId)
-  }, [])
+    const newChildFolders = allFolders.filter(folder => folder.parentId === (currentFolder?.id || null));
+    const items = [...newChildFolders, ...files];
+    setCurrentItems(items);
+    setCurrentItemIndex(0);
+    itemRefs.current = itemRefs.current.slice(0, items.length);
+  }, [currentFolder, files, allFolders]);
+  
+  useEffect(() => {
+    const item = currentItems[currentItemIndex];
+    if (item && 'type' in item) {
+        setSelectedMaterial(item as MaterialFile);
+        // テキストファイルの場合は内容を取得
+        if ((item as MaterialFile).type === 'text') {
+          setIsContentLoading(true);
+          firebaseMaterialsService.getTextContent((item as MaterialFile).id)
+            .then(content => {
+              setTextContent(content);
+              setIsContentLoading(false);
+            })
+            .catch(error => {
+              console.error('テキスト内容取得エラー:', error);
+              setTextContent(null);
+              setIsContentLoading(false);
+            });
+        } else {
+          setTextContent(null);
+        }
+        } else {
+        setSelectedMaterial(null);
+        setTextContent(null);
+    }
+  }, [currentItemIndex, currentItems]);
+  
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    const item = itemRefs.current[currentItemIndex];
+    if (container && item) {
+        const scrollLeft = item.offsetLeft - (container.offsetWidth / 2) + (item.offsetWidth / 2);
+        container.scrollTo({ left: scrollLeft, behavior: 'smooth' });
+    }
+  }, [currentItemIndex]);
 
-  // 初回送信はDataChannel準備完了時に統一（重複送信を防ぐため、このuseEffectは無効化）
-  // useEffect(() => {
-  //   console.log('❌ この初回送信useEffectは無効化されました（重複送信防止）')
-  // }, [])
+  
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
 
-  // Webカメラと音声を開始
   useEffect(() => {
     const startCamera = async () => {
       try {
-        console.log('メディアデバイスのアクセスを要求中...')
-        
-        // より詳細な音声設定
-        const mediaStream = await navigator.mediaDevices.getUserMedia({ 
-          video: {
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            facingMode: 'user'
-          }, 
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            sampleRate: 48000
-          }
-        })
-        
-        console.log('メディアストリーム取得成功:', {
-          videoTracks: mediaStream.getVideoTracks().length,
-          audioTracks: mediaStream.getAudioTracks().length
-        })
-        
+        const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
         setStream(mediaStream)
-        if (videoRef.current) {
-          videoRef.current.srcObject = mediaStream
-        }
-        
-        // 音声トラックの状態を確認
-        const audioTracks = mediaStream.getAudioTracks()
-        if (audioTracks.length > 0) {
-          console.log('音声トラック:', {
-            enabled: audioTracks[0].enabled,
-            readyState: audioTracks[0].readyState,
-            settings: audioTracks[0].getSettings()
-          })
-        } else {
-          console.warn('音声トラックが見つかりません')
-        }
-        
-      } catch (error) {
-        console.error('カメラ・音声アクセスエラー:', error)
-      }
+        if (videoRef.current) videoRef.current.srcObject = mediaStream
+      } catch (error) { console.error('カメラアクセスエラー:', error) }
     }
+    startCamera();
+    return () => stream?.getTracks().forEach(track => track.stop());
+  }, []);
 
-    startCamera()
-    
-    // 初期メッセージ（ログなし）
+  useEffect(() => {
+    const timer = setInterval(() => setBreakElapsedTime(prev => prev + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // 画面離脱時の自動切断
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (aiClient && isAiConnected) {
+        console.log('🚪 画面離脱のためAI接続を切断します');
+        aiClient.disconnect();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden && aiClient && isAiConnected) {
+        console.log('👁️ 画面が非表示になったためAI接続を切断します');
+        aiClient.disconnect();
+        setAiClient(null);
+        setIsAiConnected(false);
+        setIsConnecting(false);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop())
-      }
-    }
-  }, [])
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [aiClient, isAiConnected]);
 
-  // 休憩タイマー（経過時間のみ - 自動遷移は無効化）
+  // コンポーネントアンマウント時の清理
   useEffect(() => {
-    const timer = setInterval(() => {
-      setBreakElapsedTime(prev => prev + 1)
-      
-      // 【後で復活】自動遷移ロジックを一時的に無効化
-      // setBreakElapsedTime(prev => {
-      //   const newTime = prev + 1
-      //   
-      //   // 休憩時間終了でStudy画面に戻る
-      //   if (newTime >= breakDuration) {
-      //     navigate('/study')
-      //     return newTime
-      //   }
-      //   
-      //   return newTime
-      // })
-    }, 1000)
-
-    return () => clearInterval(timer)
-  }, [])  // 【後で復活】依存配列: [breakDuration, navigate]
+    return () => {
+      if (aiClient && isAiConnected) {
+        console.log('🧹 コンポーネントアンマウント時にAI接続を切断します');
+        aiClient.disconnect();
+      }
+      if (inactivityTimeoutRef.current) {
+        clearTimeout(inactivityTimeoutRef.current);
+      }
+    };
+  }, [aiClient, isAiConnected]);
 
   const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
-  }
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
 
-
-  // 初回専用画面撮影（AI接続チェックなし）
-  const handleInitialScreenCapture = async () => {
-    console.log('🎬 handleInitialScreenCapture() 関数開始', {
-      aiClient: !!aiClient,
-      settings: !!settings,
-      videoRef: !!videoRef.current
-    })
-    
-    if (!aiClient || !settings) {
-      console.warn('⚠️ AI接続またはSettingsが不足しています', {
-        aiClient: !!aiClient,
-        settings: !!settings
-      })
-      return
-    }
-
-    try {
-      console.log('🎬 初回画面撮影中: 新しいスクリーンショットを取得...')
-      
-      // 新しいWebカメラ写真を撮影
-      let newWebcamPhoto = ''
-      if (videoRef.current) {
-        const canvas = document.createElement('canvas')
-        const ctx = canvas.getContext('2d')
-        const video = videoRef.current
-        
-        if (ctx && video.videoWidth > 0 && video.videoHeight > 0) {
-          canvas.width = video.videoWidth
-          canvas.height = video.videoHeight
-          ctx.drawImage(video, 0, 0)
-          newWebcamPhoto = canvas.toDataURL('image/jpeg', 0.95)
-          console.log('✅ 初回Webカメラ撮影成功')
-        } else {
-          console.warn('❌ 初回Webカメラ撮影失敗 - フォールバック処理')
-        }
-      }
-
-      // 新しいスクリーン写真を撮影
-      let newScreenPhoto = ''
-      try {
-        const displayStream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            frameRate: { ideal: 30 }
-          },
-          audio: false
-        })
-        
-        const video = document.createElement('video')
-        video.srcObject = displayStream
-        video.muted = true
-        await video.play()
-
-        // 動画が安定するまで待機
-        await new Promise(resolve => setTimeout(resolve, 500))
-
-        const canvas = document.createElement('canvas')
-        const ctx = canvas.getContext('2d')
-        
-        console.log('📺 初回ビデオ状態チェック:', {
-          videoWidth: video.videoWidth,
-          videoHeight: video.videoHeight,
-          readyState: video.readyState,
-          currentTime: video.currentTime
-        })
-        
-        if (ctx && video.videoWidth > 0 && video.videoHeight > 0) {
-          canvas.width = video.videoWidth
-          canvas.height = video.videoHeight
-          ctx.drawImage(video, 0, 0)
-          newScreenPhoto = canvas.toDataURL('image/jpeg', 0.95)
-          console.log('✅ 初回スクリーンショット撮影成功:', {
-            width: video.videoWidth,
-            height: video.videoHeight,
-            dataLength: newScreenPhoto.length,
-            preview: newScreenPhoto.substring(0, 100) + '...'
-          })
-        } else {
-          console.error('❌ 初回スクリーンショット撮影失敗:', {
-            ctx: !!ctx,
-            videoWidth: video.videoWidth,
-            videoHeight: video.videoHeight
-          })
-        }
-
-        // ストリームを停止
-        displayStream.getTracks().forEach(track => track.stop())
-      } catch (error) {
-        console.error('初回スクリーンキャプチャエラー:', error)
-        // エラーの場合は既存の画像を使用
-        newScreenPhoto = capturedImages?.screenPhoto || ''
-      }
-
-      // 画像検証とログ
-      console.log('初回取得した画像の検証:', {
-        webcam: {
-          hasData: !!newWebcamPhoto,
-          length: newWebcamPhoto.length,
-          isValidDataUrl: newWebcamPhoto.startsWith('data:image/')
-        },
-        screen: {
-          hasData: !!newScreenPhoto,
-          length: newScreenPhoto.length,
-          isValidDataUrl: newScreenPhoto.startsWith('data:image/')
-        }
-      })
-
-      // 新しい画像でcapturedImagesを更新
-      const newCapturedImages = {
-        webcamPhoto: newWebcamPhoto || capturedImages?.webcamPhoto || '',
-        screenPhoto: newScreenPhoto || capturedImages?.screenPhoto || '',
-        timestamp: new Date().toISOString()
-      }
-      setCapturedImages(newCapturedImages)
-
-      // 画像の最終確認
-      if (!newCapturedImages.screenPhoto || newCapturedImages.screenPhoto.length < 1000) {
-        console.warn('初回スクリーン画像が正常に取得できませんでした。')
-        return
-      }
-
-      // 初回コンテキストでAI分析実行
-      const studyContext = {
-        studyContent: settings.studyContent,
-        elapsedTime: Date.now() - new Date(settings.startTime).getTime(),
-        targetTime: settings.targetTime,
-        pomodoroTime: settings.pomodoroTime,
-        isInitialConversation: true // 初回会話フラグ
-      }
-      
-      console.log('🚀 初回撮影完了: AIに現在の画面を送信中...', {
-        webcamSize: newCapturedImages.webcamPhoto.length,
-        screenSize: newCapturedImages.screenPhoto.length,
-        timestamp: newCapturedImages.timestamp,
-        webcamPreview: newCapturedImages.webcamPhoto.substring(0, 50),
-        screenPreview: newCapturedImages.screenPhoto.substring(0, 50),
-        isInitialCapture: true,
-        captureLocation: 'Break画面初回撮影'
-      })
-      await aiClient.sendImages(newCapturedImages.webcamPhoto, newCapturedImages.screenPhoto, studyContext)
-        
-    } catch (error) {
-      console.error('初回画面撮影エラー:', error)
-    }
-  }
-
-  // 画面更新＋再分析処理（新しいスクリーンショットを取得）
-  const handleRefreshAndAnalyze = async () => {
-    if (!aiClient || !isAiConnected || !settings) {
-      console.warn('AI接続が確立されていません')
-        return
-      }
-
-      try {
-      console.log('画面更新中: 新しいスクリーンショットを取得...')
-      
-      // 新しいWebカメラ写真を撮影
-      let newWebcamPhoto = ''
-      if (videoRef.current) {
-        const canvas = document.createElement('canvas')
-        const ctx = canvas.getContext('2d')
-        const video = videoRef.current
-
-        if (video.videoWidth && video.videoHeight && ctx) {
-          canvas.width = video.videoWidth
-          canvas.height = video.videoHeight
-          ctx.drawImage(video, 0, 0)
-          newWebcamPhoto = canvas.toDataURL('image/jpeg', 0.95)
-          console.log('新しいWebカメラ撮影成功')
-        }
-      }
-
-      // 新しいスクリーン写真を撮影
-      let newScreenPhoto = ''
-      try {
-        const displayStream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            frameRate: { ideal: 30 }
-          },
-          audio: false
-        })
-        
-        const video = document.createElement('video')
-        video.srcObject = displayStream
-        video.muted = true
-        await video.play()
-
-        // 動画が安定するまで待機
-        await new Promise(resolve => setTimeout(resolve, 500))
-
-        const canvas = document.createElement('canvas')
-        const ctx = canvas.getContext('2d')
-        
-        console.log('📺 ビデオ状態チェック:', {
-          videoWidth: video.videoWidth,
-          videoHeight: video.videoHeight,
-          readyState: video.readyState,
-          currentTime: video.currentTime
-        })
-        
-        if (ctx && video.videoWidth > 0 && video.videoHeight > 0) {
-          canvas.width = video.videoWidth
-          canvas.height = video.videoHeight
-          ctx.drawImage(video, 0, 0)
-          newScreenPhoto = canvas.toDataURL('image/jpeg', 0.95)
-          console.log('✅ 新しいスクリーンショット撮影成功:', {
-            width: video.videoWidth,
-            height: video.videoHeight,
-            dataLength: newScreenPhoto.length,
-            preview: newScreenPhoto.substring(0, 100) + '...'
-          })
-        } else {
-          console.error('❌ スクリーンショット撮影失敗:', {
-            ctx: !!ctx,
-            videoWidth: video.videoWidth,
-            videoHeight: video.videoHeight
-          })
-        }
-
-        // ストリームを停止
-        displayStream.getTracks().forEach(track => track.stop())
-      } catch (error) {
-        console.error('スクリーンショット撮影エラー:', error)
-        // エラーの場合は既存の画像を使用
-        newScreenPhoto = capturedImages?.screenPhoto || ''
-      }
-
-      // 画像検証とログ
-      console.log('取得した画像の検証:', {
-        webcam: {
-          hasData: !!newWebcamPhoto,
-          length: newWebcamPhoto.length,
-          isValidDataUrl: newWebcamPhoto.startsWith('data:image/')
-        },
-        screen: {
-          hasData: !!newScreenPhoto,
-          length: newScreenPhoto.length,
-          isValidDataUrl: newScreenPhoto.startsWith('data:image/')
-        }
-      })
-
-      // 新しい画像でcapturedImagesを更新
-      const newCapturedImages = {
-        webcamPhoto: newWebcamPhoto || capturedImages?.webcamPhoto || '',
-        screenPhoto: newScreenPhoto || capturedImages?.screenPhoto || '', // フォールバック追加
-        timestamp: new Date().toISOString()
-      }
-      setCapturedImages(newCapturedImages)
-
-      // 画像の最終確認
-      if (!newCapturedImages.screenPhoto || newCapturedImages.screenPhoto.length < 1000) {
-        console.warn('スクリーン画像が正常に取得できませんでした。既存画像を使用します。')
-        newCapturedImages.screenPhoto = capturedImages?.screenPhoto || ''
-      }
-
-      // 更新されたコンテキストでAI分析実行
-      const studyContext = {
-        studyContent: settings.studyContent,
-        elapsedTime: Date.now() - new Date(settings.startTime).getTime(),
-        targetTime: settings.targetTime,
-        pomodoroTime: settings.pomodoroTime,
-        isRefreshAnalysis: true // 更新分析フラグ
-      }
-      
-      const isInitialCapture = !hasInitialImageSent
-      console.log(`🚀 ${isInitialCapture ? '初回' : '更新'}撮影完了: AIに現在の画面を送信中...`, {
-        webcamSize: newCapturedImages.webcamPhoto.length,
-        screenSize: newCapturedImages.screenPhoto.length,
-        timestamp: newCapturedImages.timestamp,
-        webcamPreview: newCapturedImages.webcamPhoto.substring(0, 50),
-        screenPreview: newCapturedImages.screenPhoto.substring(0, 50),
-        isInitialCapture,
-        captureLocation: 'Break画面直接撮影'
-      })
-      await aiClient.sendImages(newCapturedImages.webcamPhoto, newCapturedImages.screenPhoto, studyContext)
-        
-      } catch (error) {
-      console.error('画面更新エラー:', error)
-    }
-  }
-
-  const handleContinueStudy = () => {
-    navigate('/study')
-  }
-
-  // デバッグ用：キャッシュクリア機能
-  const handleClearCache = () => {
-    localStorage.removeItem('capturedImages')
-    setCapturedImages(null)
-    setHasInitialImageSent(false)
-    console.log('🗑️ キャッシュをクリアしました')
-    alert('画像キャッシュをクリアしました。新しいスクリーンショットを撮影してください。')
-  }
-
-  const handleEndStudy = () => {
-    navigate('/')
-  }
+  const parentFolder = currentFolder ? allFolders.find(f => f.id === currentFolder.parentId) : null;
+  const selectedItem = currentItems.length > 0 ? currentItems[currentItemIndex] : null;
+  const isSelectedItemFolder = selectedItem && 'parentId' in selectedItem;
 
   return (
-    <div style={{
-      width: '100vw',
-      height: '100vh',
-      display: 'grid',
-      gridTemplateColumns: '350px 1fr',
-      background: '#000'
-    }}>
-      {/* 左側: Webカメラ + 撮影画像 + 会話UI */}
-      <div style={{
-        background: '#1a1a1a',
-        padding: '20px',
-        display: 'flex',
-        flexDirection: 'column',
-        overflowY: 'auto'
-      }}>
-        <h3 style={{ color: 'white', marginTop: 0 }}>Webカメラ</h3>
-        <video
-          ref={videoRef}
-          autoPlay
-          muted
-          style={{
-            width: '100%',
-            maxWidth: '310px',
-            borderRadius: '8px',
-            border: '2px solid #333',
-            marginBottom: '15px'
-          }}
-        />
-
-        {/* 撮影した画像表示 */}
-        {capturedImages && (
-          <div style={{ marginBottom: '15px' }}>
-            <h4 style={{ color: '#4ecdc4', marginTop: 0, marginBottom: '10px', fontSize: '14px' }}>
-              📸 撮影画像（{new Date(capturedImages.timestamp).toLocaleTimeString()}）
-            </h4>
+    <div style={{ width: '100vw', height: '100vh', display: 'flex', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+      
+      {/* AI接続中の全画面オーバーレイ */}
+      {isConnecting && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100vw',
+          height: '100vh',
+          background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.95))',
+          backdropFilter: 'blur(20px)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          animation: 'fadeIn 0.5s ease-out'
+        }}>
+          {/* メインコンテンツ */}
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            padding: '60px 40px',
+            background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(99, 102, 241, 0.1))',
+            border: '3px solid rgba(59, 130, 246, 0.6)',
+            borderRadius: '32px',
+            boxShadow: '0 20px 60px rgba(59, 130, 246, 0.4)',
+            textAlign: 'center',
+            maxWidth: '600px',
+            animation: 'slideUp 0.8s ease-out'
+          }}>
+            {/* AI アイコン */}
+            <div style={{
+              fontSize: '120px',
+              marginBottom: '32px',
+              animation: 'bounce 2s infinite'
+            }}>
+              🤖
+            </div>
             
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
-              {/* Webカメラ画像 */}
-              <div>
-                <div style={{ color: '#ccc', fontSize: '12px', marginBottom: '4px' }}>Webカメラ</div>
-                <img 
-                  src={capturedImages.webcamPhoto} 
-                  alt="Webcam capture"
-                  style={{
-                    width: '100%',
-                    borderRadius: '4px',
-                    border: '1px solid #333'
-                  }}
-                />
-              </div>
-              
-              {/* スクリーンショット */}
-              <div>
-                <div style={{ color: '#ccc', fontSize: '12px', marginBottom: '4px' }}>スクリーン</div>
-                <img 
-                  src={capturedImages.screenPhoto} 
-                  alt="Screen capture"
-                  style={{
-                    width: '100%',
-                    borderRadius: '4px',
-                    border: '1px solid #333'
-                  }}
-                />
-              </div>
+            {/* メインメッセージ */}
+            <h1 style={{
+              color: 'rgba(59, 130, 246, 1)',
+              fontSize: '48px',
+              fontWeight: '800',
+              marginBottom: '24px',
+              textShadow: '0 4px 20px rgba(59, 130, 246, 0.5)'
+            }}>
+              AI接続中...
+            </h1>
+            
+            {/* サブメッセージ */}
+            <p style={{
+              color: 'rgba(255, 255, 255, 0.9)',
+              fontSize: '24px',
+              fontWeight: '500',
+              marginBottom: '40px',
+              lineHeight: '1.5'
+            }}>
+              接続まで話しかけるのを<br />お待ちください
+            </p>
+            
+            {/* プログレスバー */}
+            <div style={{
+              width: '400px',
+              height: '8px',
+              background: 'rgba(255, 255, 255, 0.2)',
+              borderRadius: '4px',
+              overflow: 'hidden',
+              marginBottom: '32px'
+            }}>
+              <div style={{
+                width: '60%',
+                height: '100%',
+                background: 'linear-gradient(90deg, rgba(59, 130, 246, 1), rgba(99, 102, 241, 1))',
+                borderRadius: '4px',
+                animation: 'loading 2s ease-in-out infinite'
+              }}></div>
+            </div>
+            
+            {/* 装飾的な点 */}
+            <div style={{
+              display: 'flex',
+              gap: '12px'
+            }}>
+              <div style={{
+                width: '12px',
+                height: '12px',
+                background: 'rgba(59, 130, 246, 0.8)',
+                borderRadius: '50%',
+                animation: 'pulse 1.5s infinite'
+              }}></div>
+              <div style={{
+                width: '12px',
+                height: '12px',
+                background: 'rgba(99, 102, 241, 0.8)',
+                borderRadius: '50%',
+                animation: 'pulse 1.5s infinite 0.5s'
+              }}></div>
+              <div style={{
+                width: '12px',
+                height: '12px',
+                background: 'rgba(139, 92, 246, 0.8)',
+                borderRadius: '50%',
+                animation: 'pulse 1.5s infinite 1s'
+              }}></div>
             </div>
           </div>
-        )}
-        
-        {/* 休憩時間 */}
-        <div style={{
-          padding: '15px',
-          background: '#333',
-          borderRadius: '8px',
-          textAlign: 'center',
-          marginBottom: '15px'
-        }}>
-          <div style={{ color: '#ccc', fontSize: '14px' }}>休憩時間</div>
-          <div style={{ color: '#4ecdc4', fontSize: '24px', fontWeight: 'bold' }}>
-            {formatTime(breakElapsedTime)}
-          </div>
-          {/* 【後で復活】残り時間表示を一時的に無効化 */}
-          {/* <div style={{ color: '#ccc', fontSize: '12px' }}>
-            残り: {formatTime(Math.max(0, breakDuration - breakElapsedTime))}
-          </div> */}
+          
+          {/* 背景装飾 */}
+          <div style={{
+            position: 'absolute',
+            top: '20%',
+            left: '10%',
+            width: '100px',
+            height: '100px',
+            background: 'radial-gradient(circle, rgba(59, 130, 246, 0.3), transparent)',
+            borderRadius: '50%',
+            animation: 'float 3s ease-in-out infinite'
+          }}></div>
+          <div style={{
+            position: 'absolute',
+            bottom: '15%',
+            right: '15%',
+            width: '150px',
+            height: '150px',
+            background: 'radial-gradient(circle, rgba(99, 102, 241, 0.2), transparent)',
+            borderRadius: '50%',
+            animation: 'float 4s ease-in-out infinite reverse'
+          }}></div>
         </div>
-
-        {/* Zoom風のシンプル通話UI */}
-        <div style={{
-          background: '#2a2a2a',
-          borderRadius: '12px',
-          padding: '20px',
-          marginBottom: '20px',
-          textAlign: 'center'
-        }}>
-          {/* AI音声インジケーター */}
-          {isAISpeaking && (
-            <div style={{
-          marginBottom: '15px',
-              color: '#4ecdc4',
-              fontSize: '14px',
+      )}
+      {/* Left Panel */}
+      <div style={{ width: '300px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        <div style={{ background: 'rgba(255, 255, 255, 0.15)', borderRadius: '16px', padding: '16px', border: '1px solid rgba(255, 255, 255, 0.2)' }}>
+          <h3 style={{ margin: '0 0 12px 0', color: 'white', fontSize: '16px', textAlign: 'center' }}>Webカメラ</h3>
+          <div style={{ width: '100%', height: '150px', background: '#000', borderRadius: '12px', overflow: 'hidden' }}>
+            <video ref={videoRef} autoPlay muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              </div>
+              </div>
+        <div style={{ background: 'rgba(255, 255, 255, 0.15)', borderRadius: '16px', padding: '20px', border: '1px solid rgba(255, 255, 255, 0.2)', textAlign: 'center' }}>
+          <h3 style={{ margin: '0 0 8px 0', color: 'white', fontSize: '16px' }}>休憩時間</h3>
+          <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'white', fontFamily: 'monospace' }}>{formatTime(breakElapsedTime)}</div>
+            </div>
+        <div ref={interactionPanelRef} style={{ flex: 1, background: 'rgba(255, 255, 255, 0.15)', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <h3 style={{ margin: '0 0 8px 0', color: 'white', fontSize: '16px', flexShrink: 0 }}>教材で話す</h3>
+        
+          <div style={{ marginBottom: '8px', fontSize: '12px', color: 'white', wordBreak: 'break-all', flexShrink: 0 }}>📍 {breadcrumbs.map(f => f.name).join(' / ') || 'ルート'}</div>
+          <div style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.1)', marginBottom: '5px', paddingBottom: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <div onClick={() => parentFolder ? handleFolderClick(parentFolder) : (currentFolder && handleNavigateToRoot())} style={{ textAlign: 'center', padding: '4px 0', fontSize: '12px', color: 'rgba(255, 255, 255, 0.8)', opacity: currentFolder ? 1 : 0.4, cursor: currentFolder ? 'pointer' : 'default', flex: 1 }}>
+                <span>↑ {parentFolder ? parentFolder.name : (currentFolder ? 'ルートに戻る' : '')}</span>
+              </div>
+            </div>
+            
+            {/* 2分木のナビゲーション説明 */}
+            <div style={{ 
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '8px'
+              gap: '12px', 
+              padding: '8px 12px', 
+              background: 'rgba(255, 255, 255, 0.08)', 
+              borderRadius: '8px',
+              fontSize: '11px',
+              color: 'rgba(255, 255, 255, 0.7)'
+            }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ marginBottom: '2px', fontSize: '14px' }}>📁</div>
+                <div>⬆ 親</div>
+              </div>
+              <div style={{
+                borderLeft: '1px solid rgba(255, 255, 255, 0.3)', 
+                height: '20px' 
+              }}></div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ marginBottom: '2px', fontSize: '14px' }}>⬅ 📄 ➡</div>
+                <div>隣接選択</div>
+          </div>
+          <div style={{
+                borderLeft: '1px solid rgba(255, 255, 255, 0.3)', 
+                height: '20px' 
+              }}></div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ marginBottom: '2px', fontSize: '14px' }}>📁</div>
+                <div>⬇ 子</div>
+              </div>
+            </div>
+          </div>
+          <div ref={scrollContainerRef} className="no-scrollbar" style={{ display: 'flex', alignItems: 'center', overflowX: 'auto', padding: '10px 0' }}>
+            {currentItems.length > 0 ? (
+              <div style={{ display: 'flex', padding: `0 calc(50% - 50px)` }}>
+                {currentItems.map((item, index) => (
+                  <div ref={(el) => { itemRefs.current[index] = el; }} key={item.id} onClick={() => setCurrentItemIndex(index)} style={{ padding: '10px', background: index === currentItemIndex ? 'rgba(59, 130, 246, 0.4)' : 'rgba(255, 255, 255, 0.05)', border: `2px solid ${index === currentItemIndex ? 'rgba(59, 130, 246, 0.7)' : 'transparent'}`, borderRadius: '12px', margin: '0 5px', transition: 'all 0.3s ease', transform: index === currentItemIndex ? 'scale(1.08)' : 'scale(0.95)', opacity: index === currentItemIndex ? 1 : 0.7, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', flexShrink: 0, width: '90px', height: '90px', cursor: 'pointer' }}>
+                    <span style={{ fontSize: '32px' }}>{'parentId' in item ? '📁' : (item.type === 'text' ? '📄' : '🖼️')}</span>
+                    <span style={{ color: 'white', fontWeight: '500', fontSize: '12px', textAlign: 'center', width: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
+          </div>
+                ))}
+        </div>
+            ) : <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.7)', width: '100%' }}><p>空のフォルダ</p></div>}
+          </div>
+          <div onClick={() => isSelectedItemFolder && handleFolderClick(selectedItem as MaterialFolder)} style={{ textAlign: 'center', padding: '4px 0', fontSize: '12px', color: 'rgba(255, 255, 255, 0.8)', height: '20px', opacity: isSelectedItemFolder ? 1 : 0.4, cursor: isSelectedItemFolder ? 'pointer' : 'default', borderTop: '1px solid rgba(255, 255, 255, 0.1)', marginTop: '5px' }}>
+            {isSelectedItemFolder && selectedItem ? <span>↓ {selectedItem.name} を開く</span> : <span></span>}
+          </div>
+          
+          <button onClick={sendMaterialToAI} disabled={!isAiConnected || !selectedMaterial || isAiResponding || isSendingMaterial} style={{ width: '100%', padding: '10px', background: isAiConnected && selectedMaterial && !isAiResponding && !isSendingMaterial ? 'rgba(16, 185, 129, 0.8)' : 'rgba(107, 114, 128, 0.5)', color: 'white', border: 'none', borderRadius: '12px', cursor: isAiConnected && selectedMaterial && !isAiResponding && !isSendingMaterial ? 'pointer' : 'not-allowed', fontSize: '14px', fontWeight: '600', marginTop: '10px' }}>
+            {isSendingMaterial ? '送信中...' : isAiResponding ? 'AI応答中...' : 'AIに送信'}
+          </button>
+            </div>
+        </div>
+
+      {/* Right Panel: Split View */}
+      <div style={{ flex: 1, position: 'relative', display: 'flex' }}>
+        {/* Left side: Animation */}
+        <div style={{flex: 1, position: 'relative'}}>
+          <TalkAnimation selectedMaterial={selectedMaterial} />
+        </div>
+
+        {/* Right side: Material Display */}
+          <div style={{
+          flex: 1, 
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+          padding: '20px',
             }}>
               <div style={{
-                width: '8px',
-                height: '8px',
-                background: '#4ecdc4',
-                borderRadius: '50%',
-                animation: 'pulse 1s infinite'
-              }}></div>
-              🤖 キャラクターが話しています...
-          </div>
-          )}
-          
-          {/* 接続状態表示 */}
-          <div style={{
-            fontSize: '16px',
-            color: isAiConnected ? '#4ecdc4' : '#ff6b6b',
-            marginBottom: '10px'
+            width: '90%',
+            height: '80%',
+            background: 'rgba(0, 0, 0, 0.3)',
+            backdropFilter: 'blur(5px)',
+            borderRadius: '16px',
+            padding: '20px',
+            overflow: 'auto',
+            color: 'white'
           }}>
-            {isAiConnected ? '🔗 AIキャラクターと接続中' : '❌ 接続していません'}
+            {_isContentLoading ? (
+              <p>読み込み中...</p>
+            ) : selectedMaterial?.type === 'image' && selectedMaterial.downloadURL ? (
+              <img src={selectedMaterial.downloadURL} alt={selectedMaterial.name} style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '8px' }} />
+            ) : selectedMaterial?.type === 'text' ? (
+              <pre style={{ fontSize: '16px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
+                {_textContent}
+              </pre>
+            ) : (
+              <div style={{display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'rgba(255,255,255,0.7)'}}>
+                <p>教材を選択するとここに表示されます</p>
+          </div>
+        )}
+          </div>
           </div>
           
-          {/* 部分的なテキスト表示（リアルタイム） */}
-          {partialText && (
-            <div style={{
-              background: 'rgba(78, 205, 196, 0.1)',
-              borderRadius: '8px',
-              padding: '10px',
-              margin: '10px 0',
-                fontSize: '14px',
-              color: '#4ecdc4',
-              fontStyle: 'italic'
-            }}>
-              💭 {partialText}
+        <div style={{ position: 'absolute', top: '20px', right: '20px', zIndex: 20, display: 'flex', gap: '12px' }}>
+          <button onClick={() => setShowConfirmDialog(true)} style={{ padding: '12px 24px', background: 'rgba(255, 255, 255, 0.2)', color: 'white', border: '1px solid rgba(255, 255, 255, 0.3)', borderRadius: '16px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}>Homeに戻る</button>
+          <button onClick={() => {
+            // AI接続を切断してから画面遷移
+            if (aiClient && isAiConnected) {
+              console.log('🚪 勉強に戻るためAI接続を切断します');
+              aiClient.disconnect();
+              setAiClient(null);
+              setIsAiConnected(false);
+              setIsConnecting(false);
+            }
+            navigate('/study');
+          }} style={{ padding: '12px 24px', background: 'rgba(255, 255, 255, 0.2)', color: 'white', border: '1px solid rgba(255, 255, 255, 0.3)', borderRadius: '16px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}>勉強に戻る</button>
             </div>
-          )}
+        <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 10, background: 'rgba(255, 255, 255, 0.9)', borderRadius: '12px', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1)' }}>
+          <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: isAiConnected ? (isAiResponding ? '#8b5cf6' : '#10b981') : isConnecting ? '#f59e0b' : '#ef4444', animation: (isConnecting || isAiResponding) ? 'pulse 1.5s infinite' : 'none' }} />
+          <span style={{ fontSize: '14px', fontWeight: '600', color: '#333' }}>
+            {isAiConnected ? (isAiResponding ? 'AI応答中...' : 'AI接続中') : isConnecting ? '接続中...' : 'AI未接続'}
+          </span>
         </div>
+        {!isAiConnected && !isConnecting && (
+          <div style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 10 }}>
+            <button onClick={startConnection} style={{ padding: '12px 24px', background: 'rgba(16, 185, 129, 0.8)', color: 'white', border: 'none', borderRadius: '16px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}>AIと話す</button>
+          </div>
+        )}
 
-        {/* AI接続状況 */}
-        <div style={{
-          padding: '10px',
-          background: isAiConnected ? 'rgba(40, 167, 69, 0.2)' : 
-                     isConnecting ? 'rgba(255, 193, 7, 0.2)' : 'rgba(220, 53, 69, 0.2)',
-          borderRadius: '6px',
-          border: `1px solid ${isAiConnected ? '#28a745' : 
-                                isConnecting ? '#ffc107' : '#dc3545'}`,
-          fontSize: '12px',
-          textAlign: 'center',
-          marginBottom: '10px'
-        }}>
-          {isAiConnected ? '🟢 WebRTC接続中（リアルタイム音声対話）' : 
-           isConnecting ? '🟡 接続中...' : '🔴 未接続'}
-        </div>
-
-        {/* AI状態表示 */}
-        {isAISpeaking && (
+        {/* Toast通知 */}
+        {showToast && (
           <div style={{
-            padding: '8px',
-            background: 'rgba(76, 175, 80, 0.2)',
-            borderRadius: '4px',
-            fontSize: '12px',
-            marginBottom: '10px',
-            color: '#4caf50',
+            position: 'fixed',
+          top: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 9999,
+            background: 'rgba(239, 68, 68, 0.95)',
+            backdropFilter: 'blur(20px)',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            borderRadius: '16px',
+            padding: '16px 24px',
+            color: 'white',
+            fontSize: '16px',
+            fontWeight: '600',
+            boxShadow: '0 16px 32px rgba(239, 68, 68, 0.4)',
+            animation: 'slideDown 0.3s ease-out',
+            maxWidth: '400px',
             textAlign: 'center'
           }}>
-            🤖 AIが話しています...
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
+              <span style={{ fontSize: '20px' }}>⚠️</span>
+              <span>{toastMessage}</span>
+          </div>
           </div>
         )}
 
-        {/* 現在生成中のテキスト */}
-        {partialText && (
+        {/* 確認ダイアログ */}
+        {showConfirmDialog && (
           <div style={{
-            padding: '10px',
-            background: 'rgba(33, 150, 243, 0.1)',
-            borderRadius: '6px',
-            marginBottom: '10px',
-            fontSize: '14px',
-            color: '#2196f3',
-            opacity: 0.7
+            position: 'fixed',
+            top: '0',
+            left: '0',
+            right: '0',
+            bottom: '0',
+            background: 'rgba(0, 0, 0, 0.7)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000
           }}>
-            🤖 生成中: {partialText}
-          </div>
-        )}
-
-        {/* AI接続状態に応じたボタン表示 */}
-        {!isAiConnected && !isConnecting ? (
-          /* 音声対話開始ボタン */
-          <div style={{ marginBottom: '15px' }}>
-        <button
-              onClick={startConnection}
-          style={{
-            padding: '15px',
-                background: '#007bff',
-            color: 'white',
-            border: 'none',
-            borderRadius: '8px',
-                cursor: 'pointer',
-            fontSize: '16px',
-                fontWeight: 'bold',
-                width: '100%'
-          }}
-        >
-              🎤 リアルタイム音声対話を開始
-        </button>
-          </div>
-        ) : (
-          /* AI接続中のコントロール */
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '15px' }}>
-            <button
-              onClick={stopConnection}
-              style={{
-                padding: '12px',
-                background: '#dc3545',
+            <div style={{
+              background: 'rgba(255, 255, 255, 0.15)',
+              backdropFilter: 'blur(20px)',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
+              borderRadius: '24px',
+              padding: '32px',
+              width: '90%',
+              maxWidth: '400px',
+              boxShadow: '0 25px 50px rgba(0, 0, 0, 0.25)',
+              animation: 'dialogSlideIn 0.3s ease-out'
+            }}>
+              <h3 style={{ 
+                margin: '0 0 16px 0', 
+                fontSize: '1.25rem', 
+                fontWeight: '600',
                 color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
+                textAlign: 'center',
+                textShadow: '0 2px 4px rgba(0,0,0,0.3)'
+              }}>
+                勉強を中断してもよろしいですか？
+              </h3>
+              <p style={{ 
+                margin: '0 0 24px 0', 
                 fontSize: '14px',
-                fontWeight: 'bold',
-                width: '100%'
-              }}
-            >
-              🔇 音声対話を終了
-            </button>
-          </div>
-        )}
-
-        {/* 画面更新ボタン（AI接続中のみ、独立して表示） */}
-        {isAiConnected && (
-          <div style={{ marginBottom: '15px' }}>
-            <button
-              onClick={handleRefreshAndAnalyze}
-              style={{
-                padding: '12px',
-                background: 'linear-gradient(45deg, #17a2b8, #20c997)',
-                color: 'white',
-                border: 'none',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                fontSize: '14px',
-                fontWeight: 'bold',
-                width: '100%',
-                boxShadow: '0 3px 6px rgba(0,0,0,0.2)',
-                transition: 'transform 0.2s ease'
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
-              onMouseLeave={(e) => e.currentTarget.style.transform = 'translateY(0)'}
-            >
-              🔄 画面更新＋再分析
-            </button>
-          </div>
-        )}
-
-        {/* ナビゲーションボタン */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        <div style={{ display: 'flex', gap: '8px' }}>
+                color: 'rgba(255, 255, 255, 0.8)',
+                textAlign: 'center',
+                lineHeight: '1.5'
+              }}>
+                AI接続が切断され、Homeに戻ります。
+              </p>
+              <div style={{ 
+                display: 'flex', 
+                gap: '12px', 
+                justifyContent: 'center' 
+              }}>
           <button
-            onClick={handleContinueStudy}
+                  onClick={() => setShowConfirmDialog(false)}
             style={{
-              flex: 1,
-              padding: '12px',
-              background: '#007bff',
+                    padding: '12px 24px',
+                    background: 'rgba(107, 114, 128, 0.8)',
               color: 'white',
               border: 'none',
-              borderRadius: '8px',
+                    borderRadius: '12px',
               cursor: 'pointer',
-              fontSize: '14px'
-            }}
-          >
-            復帰
+                fontSize: '14px',
+                    fontWeight: '600',
+                    transition: 'all 0.3s ease',
+                    backdropFilter: 'blur(10px)'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'rgba(107, 114, 128, 1)'
+                    e.currentTarget.style.transform = 'translateY(-2px)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'rgba(107, 114, 128, 0.8)'
+                    e.currentTarget.style.transform = 'translateY(0)'
+                  }}
+                >
+                  キャンセル
           </button>
           <button
-            onClick={handleEndStudy}
+                  onClick={() => {
+                    setShowConfirmDialog(false);
+                    handleGoHome();
+                  }}
             style={{
-              flex: 1,
-              padding: '12px',
-              background: '#dc3545',
+                    padding: '12px 24px',
+                    background: 'rgba(239, 68, 68, 0.8)',
               color: 'white',
               border: 'none',
-              borderRadius: '8px',
+                    borderRadius: '12px',
               cursor: 'pointer',
-              fontSize: '14px'
-            }}
-          >
-            中断
-            </button>
-          </div>
-          
-          {/* デバッグ用キャッシュクリアボタン */}
-          <button
-            onClick={handleClearCache}
-            style={{
-              padding: '8px',
-              background: '#ffc107',
-              color: '#000',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              opacity: 0.7
-            }}
-          >
-            🗑️ 画像キャッシュクリア（デバッグ用）
+                fontSize: '14px',
+                    fontWeight: '600',
+                    transition: 'all 0.3s ease',
+                    backdropFilter: 'blur(10px)'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'rgba(239, 68, 68, 1)'
+                    e.currentTarget.style.transform = 'translateY(-2px)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'rgba(239, 68, 68, 0.8)'
+                    e.currentTarget.style.transform = 'translateY(0)'
+                  }}
+                >
+                  Homeに戻る
           </button>
         </div>
       </div>
+      </div>
+        )}
 
-      {/* 右側: TalkAnimation */}
-      <div style={{ position: 'relative' }}>
-        <TalkAnimation />
-        
-        {/* 休憩中表示 */}
-        <div style={{
-          position: 'absolute',
-          top: '20px',
-          left: '20px',
-          background: 'rgba(0,0,0,0.7)',
-          color: 'white',
-          padding: '15px',
-          borderRadius: '8px'
-        }}>
-          <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#4ecdc4' }}>
-            😊 休憩中
-          </div>
-          <div style={{ fontSize: '14px', marginTop: '5px' }}>
-            Study with me の休憩時間です
-          </div>
-        </div>
-
-        {/* ランダムタイミング表示 */}
-        <div style={{
-          position: 'absolute',
-          top: '20px',
-          right: '20px',
-          background: 'rgba(0,0,0,0.7)',
-          color: 'white',
-          padding: '15px',
-          borderRadius: '8px',
-          textAlign: 'center'
-        }}>
-          <div style={{ fontSize: '14px', opacity: 0.8 }}>ランダムタイミング</div>
-          <div style={{ fontSize: '16px', fontWeight: 'bold' }}>
-            ポモドーロ±σ
-          </div>
-        </div>
+        <style>{`
+          @keyframes slideDown {
+            from {
+              opacity: 0;
+              transform: translateX(-50%) translateY(-20px);
+            }
+            to {
+              opacity: 1;
+              transform: translateX(-50%) translateY(0);
+            }
+          }
+          
+          @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+          }
+          
+          @keyframes dialogSlideIn {
+            from {
+              opacity: 0;
+              transform: scale(0.9) translateY(20px);
+            }
+            to {
+              opacity: 1;
+              transform: scale(1) translateY(0);
+            }
+          }
+        `}</style>
       </div>
     </div>
   )
