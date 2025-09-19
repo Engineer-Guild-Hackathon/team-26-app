@@ -4,9 +4,10 @@ import { useGLTF } from '@react-three/drei'
 import * as THREE from 'three'
 import { OPTIMAL_CAMERA_POSITION } from '../constants/cameraPositions'
 import Material3D from './Material3D'
+import modelUrl from '../assets/udemy_test.glb?url'
 
 function AnimatedModel() {
-  const { scene, animations } = useGLTF('/udemy_test.glb')
+  const { scene, animations } = useGLTF(modelUrl)
   const mixer = useRef<THREE.AnimationMixer | null>(null)
 
   useEffect(() => {
