@@ -1,1191 +1,860 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import TalkAnimation from '../components/TalkAnimation'
-import { type MaterialFolder, type MaterialFile, firebaseMaterialsService } from '../services/firebaseMaterials'
+import { type MaterialFolder, type MaterialFile, firebaseMaterialsService } from 'src/services/firebaseMaterials'
 
-// CSS animations for speaking indicator
+
+// CSS for animations and styling
 const styles = `
-  @keyframes pulse {
-    0% { opacity: 1; }
-    50% { opacity: 0.3; }
-    100% { opacity: 1; }
-  }
+ @keyframes pulse {
+   0% { opacity: 1; transform: scale(1); }
+   50% { opacity: 0.5; transform: scale(0.9); }
+   100% { opacity: 1; transform: scale(1); }
+ }
+ .no-scrollbar::-webkit-scrollbar {
+   display: none;
+ }
+ .no-scrollbar {
+   -ms-overflow-style: none;
+   scrollbar-width: none;
+ }
 `
-
-// Inject styles into head
 if (typeof document !== 'undefined') {
-  const styleElement = document.createElement('style')
-  styleElement.textContent = styles
-  document.head.appendChild(styleElement)
+ const styleElement = document.createElement('style')
+ styleElement.textContent = styles
+ document.head.appendChild(styleElement)
 }
+
 
 // WebRTC Realtime AI Client
 class WebRTCRealtimeClient {
-  private pc: RTCPeerConnection | null = null
-  private dataChannel: RTCDataChannel | null = null
-  private mediaStream: MediaStream | null = null
-  private onMessage: (message: any) => void
-  // private isResponseActive: boolean = false // 現在未使用
-  constructor(_breakId: string, onMessage: (message: any) => void, _onAudioResponse: (audioData: string) => void) {
-    this.onMessage = onMessage
-  }
+ private pc: RTCPeerConnection | null = null
+ private dataChannel: RTCDataChannel | null = null
+ private mediaStream: MediaStream | null = null
+ private onMessage: (message: any) => void
+ // private onAudioResponse: (audioData: string) => void - 現在未使用
+ // private breakId: string - 現在未使用
+ private isSending: boolean = false // 送信状態管理
+ private isResponseActive: boolean = false // レスポンス状態管理
 
-  async connect() {
-    try {
-      console.log('WebRTC接続開始...')
+
+ constructor(_breakId: string, onMessage: (message: any) => void, _onAudioResponse: (audioData: string) => void) {
+   // this.breakId = breakId - 現在未使用
+   this.onMessage = onMessage
+   // this.onAudioResponse = _onAudioResponse - 現在未使用
+ }
+
+
+ async connect() {
+   try {
+     console.log('WebRTC接続開始...')
+    
+     // 1. ephemeral keyを取得
+     const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+     const sessionResp = await fetch(`${apiUrl}/session/create`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' }
+     })
+    
+     if (!sessionResp.ok) {
+       throw new Error('セッション作成に失敗しました')
+     }
+    
+     const sessionData = await sessionResp.json()
+     console.log('Session created:', sessionData)
+
+
+     // 2. RTCPeerConnection作成
+     this.pc = new RTCPeerConnection()
+
+
+     // 3. マイク音声を取得
+     this.mediaStream = await navigator.mediaDevices.getUserMedia({
+       audio: {
+         echoCancellation: true,
+         noiseSuppression: true,
+         autoGainControl: true,
+         sampleRate: 24000
+       }
+     })
+    
+     this.mediaStream.getTracks().forEach((track) => {
+       this.pc!.addTrack(track, this.mediaStream!)
+     })
+
+
+     // 4. データチャンネル作成
+     this.dataChannel = this.pc.createDataChannel("oai-events")
+     this.setupDataChannelEvents()
+
+
+     // 5. WebRTCイベント設定
+     this.pc.addEventListener("track", (event) => {
+       console.log("Received track:", event.track.kind)
+       if (event.track.kind === "audio") {
+         const audio = new Audio()
+         audio.srcObject = event.streams[0]
+         audio.play()
+       }
+     })
+
+
+     // 6. Offer作成・送信
+     const offer = await this.pc.createOffer()
+     await this.pc.setLocalDescription(offer)
+
+
+     const sdpResp = await fetch(`https://api.openai.com/v1/realtime?model=gpt-realtime`, {
+       method: "POST",
+       headers: {
+         "Authorization": `Bearer ${sessionData.client_secret.value}`,
+         "Content-Type": "application/sdp",
+       },
+       body: offer.sdp,
+     })
+
+
+     if (!sdpResp.ok) {
+       throw new Error("SDP answer取得に失敗しました")
+     }
+
+
+     const answerSdp = await sdpResp.text()
+     await this.pc.setRemoteDescription({ type: "answer", sdp: answerSdp })
+
+
+     this.onMessage({
+       type: 'connected',
+       message: 'WebRTC接続完了！リアルタイム音声会話が開始されました🎤'
+     })
+
+
+   } catch (error) {
+     console.error('WebRTC connection error:', error)
+     this.onMessage({ type: 'error', message: `接続エラー: ${error instanceof Error ? error.message : String(error)}` })
+   }
+ }
+
+
+ private setupDataChannelEvents() {
+   if (!this.dataChannel) return
+
+
+   this.dataChannel.addEventListener("open", () => {
+     console.log("Data channel opened")
+    
+     // セッション設定（画像対応）
+     const sessionUpdate = {
+       type: "session.update",
+       session: {
+         modalities: ["text", "audio"],
+         turn_detection: {
+           type: "server_vad",
+           threshold: 0.5,
+           prefix_padding_ms: 300,
+           silence_duration_ms: 500,
+         },
+         voice: "alloy",
+         input_audio_format: "pcm16",
+         output_audio_format: "pcm16",
+         instructions: `あなたは一緒に勉強している親しい友達です。Study with meで同じ分野を勉強している仲間として、タメ口で気軽に話しかけてください。
+
+
+会話の特徴：
+- タメ口で親しみやすく（「〜だよ」「〜じゃん」など）
+- たまに軽くいじったり冗談を言う友達関係
+- 同じ分野を一緒に勉強している仲間感を出す
+- 短めの返答（1-2文程度）
+- 絵文字を適度に使用
+
+
+教材についてフランクに話し、学習者を励ましてください。`,
+       },
+     }
+     this.dataChannel!.send(JSON.stringify(sessionUpdate))
+
+
+     this.onMessage({ type: 'connected' })
+   })
+
+
+   this.dataChannel.addEventListener("message", (event) => {
+     const data = JSON.parse(event.data)
+     // 重要なメッセージのみログ出力
+     if (data.type.includes('error') || data.type.includes('done') || data.type.includes('created')) {
+       console.log("Data channel message:", data)
+     }
+    
+     this.handleRealtimeMessage(data)
+   })
+
+
+   this.dataChannel.addEventListener("close", () => {
+     console.warn("Data channel closed")
+   })
+
+
+   this.dataChannel.addEventListener("error", (error) => {
+     console.error("Data channel error:", error)
+     // エラー時は状態をリセット
+     this.isSending = false
+     this.isResponseActive = false
+     this.onMessage({
+       type: 'error',
+       message: 'DataChannel接続エラーが発生しました。再接続してください。'
+     })
+   })
+ }
+
+
+ private handleRealtimeMessage(data: any) {
+   switch (data.type) {
+     case "response.audio.delta":
+       if (data.delta) {
+         console.log("Audio delta received, length:", data.delta.length)
+         this.playAudioDelta(data.delta)
+       }
+       break
+
+
+     case "response.audio.done":
+       console.log("Audio response done")
+       this.onMessage({ type: 'ai_audio_done', message: '🔊 音声応答完了' })
+       break
+
+
+     case "response.created":
+       console.log("Response started")
+       this.isResponseActive = true // レスポンス開始
+       this.onMessage({ type: 'ai_response_started', message: '🤖 AI応答開始...' })
+       break
+
+
+     case "conversation.item.input_audio_transcription.completed":
+       console.log("User transcription:", data.transcript)
+       this.onMessage({
+         type: 'user_transcription',
+         message: `🎤 あなた: ${data.transcript}`,
+         transcript: data.transcript
+       })
+       break
+
+
+     case "response.text.delta":
+       if (data.delta) {
+         this.onMessage({
+           type: 'ai_text_delta',
+           content: data.delta
+         })
+       }
+       break
+
+
+     case "response.text.done":
+       console.log("Text response done:", data.text)
+       this.onMessage({
+         type: 'ai_text_done',
+         message: `🤖 キャラクター: ${data.text}`
+       })
+       break
+
+
+     case "response.done":
+       console.log("Response completed")
+       this.isResponseActive = false // レスポンス完了
+       this.isSending = false // 送信状態もリセット
       
-      // 1. ephemeral keyを取得
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
-      const sessionResp = await fetch(`${apiUrl}/session/create`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      })
+       if (data.response && data.response.status === 'failed') {
+         console.error("🚨 Response failed:", data.response.status_details)
+         this.onMessage({
+           type: 'error',
+           message: `❌ AI応答エラー: ${data.response.status_details?.error?.message || 'Unknown error'}`
+         })
+       } else {
+         this.onMessage({ type: 'ai_response_done', message: '✅ 応答完了' })
+       }
+       break
+
+
+     case "error":
+       console.error("OpenAI API error:", data.error)
+       this.onMessage({ type: 'error', message: `⚠️ エラー: ${data.error.message}` })
+       break
+   }
+ }
+
+
+ private playAudioDelta(delta: string) {
+   try {
+     const audioData = atob(delta)
+     const audioArray = new Uint8Array(audioData.length)
+     for (let i = 0; i < audioData.length; i++) {
+       audioArray[i] = audioData.charCodeAt(i)
+     }
+     this.playAudio(audioArray.buffer)
+   } catch (error) {
+     console.error('Audio playback error:', error)
+   }
+ }
+
+
+ private playAudio(audioBuffer: ArrayBuffer) {
+   const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+   audioContext.decodeAudioData(audioBuffer, (decodedData) => {
+     const source = audioContext.createBufferSource()
+     source.buffer = decodedData
+     source.connect(audioContext.destination)
+     source.start()
+   }).catch(console.error)
+ }
+
+
+ // 画像圧縮関数（Blob版）
+ private async compressImageBlob(blob: Blob, maxSizeKB: number): Promise<string> {
+   return new Promise((resolve, reject) => {
+       const img = new Image()
+       img.onload = () => {
+         const canvas = document.createElement('canvas')
+         const ctx = canvas.getContext('2d')
+         if (!ctx) {
+         reject(new Error('Canvas context not available'))
+           return
+         }
+        
+       // 適度に縮小（maxSizeKBに応じてサイズ調整）
+       const maxDimension = maxSizeKB > 80 ? 600 : 400
+         let { width, height } = img
+        
+         if (width > height) {
+           if (width > maxDimension) {
+             height = (height * maxDimension) / width
+             width = maxDimension
+           }
+         } else {
+           if (height > maxDimension) {
+             width = (width * maxDimension) / height
+             height = maxDimension
+           }
+         }
+        
+         canvas.width = Math.round(width)
+         canvas.height = Math.round(height)
+        
+       // 高品質レンダリング
+         ctx.imageSmoothingEnabled = true
+         ctx.imageSmoothingQuality = 'high'
+         ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        
+       // 品質を段階的に下げて調整
+       let quality = 0.85
+         let compressed = canvas.toDataURL('image/jpeg', quality)
+         let compressedSizeKB = (compressed.length * 0.75) / 1024
+        
+       while (compressedSizeKB > maxSizeKB && quality > 0.5) {
+           quality -= 0.05
+           compressed = canvas.toDataURL('image/jpeg', quality)
+           compressedSizeKB = (compressed.length * 0.75) / 1024
+         }
+        
+         resolve(compressed)
+       }
       
-      if (!sessionResp.ok) {
-        throw new Error('セッション作成に失敗しました')
-      }
+     img.onerror = () => reject(new Error('Image load failed'))
+     img.src = URL.createObjectURL(blob)
+   })
+ }
+
+
+ // 教材送信機能
+ async sendMaterial(material: MaterialFile, content?: string) {
+   if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+     console.error('Data channel not open. State:', this.dataChannel?.readyState)
+     return
+   }
+
+
+   if (this.isSending) {
+     console.warn('既に送信中です。重複送信を防止します。')
+     return
+   }
+
+
+   if (this.isResponseActive) {
+     console.warn('AI応答中です。応答完了後に再試行してください。')
+     return
+   }
+
+
+   this.isSending = true
+   console.log('📚 教材送信開始:', material.name)
+
+
+   try {
+     if (material.type === 'text' && content) {
+       // テキスト教材の場合
+   const textMessage = {
+     type: "conversation.item.create",
+     item: {
+       type: "message",
+       role: "user",
+       content: [
+         {
+           type: "input_text",
+               text: `「${material.name}」について話そう！\n\n【内容】\n${content}`
+             }
+           ]
+         }
+       }
+       this.dataChannel.send(JSON.stringify(textMessage))
       
-      const sessionData = await sessionResp.json()
-      console.log('Session created:', sessionData)
-
-      // 2. RTCPeerConnection作成
-      this.pc = new RTCPeerConnection()
-
-      // 3. マイク音声を取得
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: 24000
-        }
-      })
+     } else if (material.type === 'image' && material.downloadURL) {
+       // 画像教材の場合：テキストと画像の両方を送信
+       const textMessage = {
+     type: "conversation.item.create",
+     item: {
+       type: "message",
+       role: "user",
+       content: [
+         {
+               type: "input_text",
+               text: `「${material.name}」という画像について話そう！`
+             }
+           ]
+         }
+       }
+       this.dataChannel.send(JSON.stringify(textMessage))
       
-      this.mediaStream.getTracks().forEach((track) => {
-        this.pc!.addTrack(track, this.mediaStream!)
-      })
+       // 画像をbase64に変換して送信
+       setTimeout(async () => {
+         try {
+           console.log('🖼️ 画像をbase64に変換中:', material.downloadURL)
+           const response = await fetch(material.downloadURL)
+           const blob = await response.blob()
+          
+           // 画像を圧縮してからBase64変換
+           const compressedBase64 = await this.compressImageBlob(blob, 100) // 100KB制限
+           console.log('✅ 圧縮済みBase64変換完了:', compressedBase64.substring(0, 100) + '...')
+           console.log('📊 圧縮後サイズ:', Math.round((compressedBase64.length * 0.75) / 1024), 'KB')
+          
+           const imageMessage = {
+     type: "conversation.item.create",
+     item: {
+       type: "message",
+       role: "user",
+       content: [
+         {
+           type: "input_image",
+                   image_url: compressedBase64
+                 }
+               ]
+             }
+           }
+          
+           // メッセージサイズをチェック
+           const messageStr = JSON.stringify(imageMessage)
+           const messageSizeKB = (messageStr.length * 0.75) / 1024
+           console.log('📦 メッセージサイズ:', messageSizeKB.toFixed(2), 'KB')
+          
+           if (messageSizeKB > 150) {
+             console.warn('⚠️ メッセージが大きすぎます:', messageSizeKB.toFixed(2), 'KB')
+             return
+           }
+          
+           this.dataChannel!.send(messageStr)
+          
+     } catch (error) {
+           console.error('❌ 画像処理エラー:', error)
+     }
+       }, 100)
+   }
 
-      // 4. データチャンネル作成
-      this.dataChannel = this.pc.createDataChannel("oai-events")
-      this.setupDataChannelEvents()
 
-      // 5. WebRTCイベント設定
-      this.pc.addEventListener("track", (event) => {
-        console.log("Received track:", event.track.kind)
-        if (event.track.kind === "audio") {
-          const audio = new Audio()
-          audio.srcObject = event.streams[0]
-          audio.play()
-        }
-      })
+   setTimeout(() => {
+       const responseRequest = {
+         type: 'response.create',
+         response: {
+           modalities: ['text', 'audio']
+         }
+       }
+       this.dataChannel!.send(JSON.stringify(responseRequest))
+       this.isSending = false
+   }, 200)
 
-      // 6. Offer作成・送信
-      const offer = await this.pc.createOffer()
-      await this.pc.setLocalDescription(offer)
 
-      const sdpResp = await fetch(`https://api.openai.com/v1/realtime?model=gpt-realtime`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${sessionData.client_secret.value}`,
-          "Content-Type": "application/sdp",
-        },
-        body: offer.sdp,
-      })
+   } catch (error) {
+     console.error('教材送信エラー:', error)
+     this.isSending = false
+   }
+ }
 
-      if (!sdpResp.ok) {
-        throw new Error(`SDP送信失敗: ${sdpResp.status}`)
-      }
 
-      const answerSdp = await sdpResp.text()
-      await this.pc.setRemoteDescription({ type: "answer", sdp: answerSdp })
-
-      console.log('WebRTC接続完了')
-    } catch (error) {
-      console.error('WebRTC接続エラー:', error)
-      throw error
-    }
-  }
-
-  private setupDataChannelEvents() {
-    if (!this.dataChannel) return
-
-    this.dataChannel.addEventListener("open", () => {
-      console.log("DataChannel opened")
-      this.onMessage({ type: 'connected', message: '🔗 WebRTC接続完了' })
-    })
-
-    this.dataChannel.addEventListener("message", (event) => {
-      try {
-      const data = JSON.parse(event.data)
-      this.handleRealtimeMessage(data)
-      } catch (error) {
-        console.error("Message parsing error:", error)
-      }
-    })
-
-    this.dataChannel.addEventListener("close", () => {
-      console.log("DataChannel closed")
-      this.onMessage({ type: 'disconnected', message: '❌ 接続が切断されました' })
-    })
-
-    this.dataChannel.addEventListener("error", (error) => {
-      console.error("DataChannel error:", error)
-    })
-  }
-
-  private handleRealtimeMessage(data: any) {
-    switch (data.type) {
-      case "response.audio.delta":
-        if (data.delta) {
-          console.log("Audio delta received, length:", data.delta.length)
-          this.playAudioDelta(data.delta)
-        }
-        break
-
-      case "response.audio.done":
-        console.log("Audio response done")
-        this.onMessage({ type: 'ai_audio_done', message: '🔊 音声応答完了' })
-        break
-
-      case "response.created":
-        console.log("Response started")
-        // this.isResponseActive = true
-        this.onMessage({ type: 'ai_response_started', message: '🤖 AI応答開始...' })
-        break
-
-      case "conversation.item.input_audio_transcription.completed":
-        console.log("User transcription:", data.transcript)
-        this.onMessage({ 
-          type: 'user_transcription', 
-          message: `🎤 あなた: ${data.transcript}`,
-          transcript: data.transcript
-        })
-        break
-
-      case "response.text.delta":
-        if (data.delta) {
-          this.onMessage({ 
-            type: 'ai_text_delta', 
-            content: data.delta 
-          })
-        }
-        break
-
-      case "response.text.done":
-        console.log("Text response done:", data.text)
-        this.onMessage({ 
-          type: 'ai_text_done', 
-          message: `🤖 キャラクター: ${data.text}` 
-        })
-        break
-
-      case "response.done":
-        console.log("Response completed")
-        // this.isResponseActive = false
-        this.onMessage({ type: 'ai_response_completed', message: '✅ AI応答完了' })
-        break
-
-      default:
-        console.log("Unhandled message type:", data.type, data)
-        break
-    }
-  }
-
-  private playAudioDelta(base64Audio: string) {
-    // PCM16音声データの再生処理
-    console.log('AI音声データ受信:', base64Audio.length)
-    // TODO: 音声再生実装
-  }
-
-  // 公開メソッド：メッセージ送信
-  sendMessage(message: any) {
-    if (this.dataChannel && this.dataChannel.readyState === 'open') {
-      this.dataChannel.send(JSON.stringify(message))
-    } else {
-      console.warn('DataChannel is not open')
-    }
-  }
-
-  // 公開メソッド：DataChannel状態確認
-  isDataChannelOpen(): boolean {
-    return this.dataChannel !== null && this.dataChannel.readyState === 'open'
-  }
-
-  disconnect() {
-    if (this.dataChannel) {
-      this.dataChannel.close()
-      this.dataChannel = null
-    }
-    if (this.pc) {
-      this.pc.close()
-      this.pc = null
-    }
-    if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach(track => track.stop())
-      this.mediaStream = null
-    }
-  }
+ disconnect() {
+   // 状態をリセット
+   this.isSending = false
+   this.isResponseActive = false
+  
+   if (this.dataChannel) {
+     this.dataChannel.close()
+     this.dataChannel = null
+   }
+   if (this.pc) {
+     this.pc.close()
+     this.pc = null
+   }
+   if (this.mediaStream) {
+     this.mediaStream.getTracks().forEach(track => track.stop())
+     this.mediaStream = null
+   }
+ }
 }
 
+
 export default function Break() {
-  const navigate = useNavigate()
-  const [_settings, setSettings] = useState<any>(null)
-  const [breakElapsedTime, setBreakElapsedTime] = useState(0)
-  const [partialText, setPartialText] = useState('')
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const [stream, setStream] = useState<MediaStream | null>(null)
-  
+ const navigate = useNavigate()
+ const [breakElapsedTime, setBreakElapsedTime] = useState(0)
+ const [partialText, setPartialText] = useState('')
+ const videoRef = useRef<HTMLVideoElement>(null)
+ const [stream, setStream] = useState<MediaStream | null>(null)
   // WebRTC Realtime AI関連
-  const [aiClient, setAiClient] = useState<WebRTCRealtimeClient | null>(null)
-  const [isAiConnected, setIsAiConnected] = useState(false)
-  const [isConnecting, setIsConnecting] = useState(false)
-  const [isAISpeaking, setIsAISpeaking] = useState(false)
-  const [breakId, setBreakId] = useState<string>('')
+ const [aiClient, setAiClient] = useState<WebRTCRealtimeClient | null>(null)
+ const [isAiConnected, setIsAiConnected] = useState(false)
+ const [isConnecting, setIsConnecting] = useState(false)
+ const [isAISpeaking, setIsAISpeaking] = useState(false)
+ const [conversationLog, setConversationLog] = useState<{role: 'user' | 'ai', text: string}[]>([])
+ const conversationEndRef = useRef<HTMLDivElement>(null);
+
+
+ // 教材選択関連の状態
+ const [allFolders, setAllFolders] = useState<MaterialFolder[]>([])
+ const [currentFolder, setCurrentFolder] = useState<MaterialFolder | null>(null)
+ const [files, setFiles] = useState<MaterialFile[]>([])
+ const [selectedMaterial, setSelectedMaterial] = useState<MaterialFile | null>(null)
+ const [breadcrumbs, setBreadcrumbs] = useState<MaterialFolder[]>([])
+ const [_textContent, setTextContent] = useState<string | null>(null)
+ const [_isContentLoading, setIsContentLoading] = useState(false)
+  const [currentItemIndex, setCurrentItemIndex] = useState(0)
+ const [currentItems, setCurrentItems] = useState<(MaterialFolder | MaterialFile)[]>([])
+ const interactionPanelRef = useRef<HTMLDivElement>(null);
+ const scrollContainerRef = useRef<HTMLDivElement>(null);
+ const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+
+
+
+ const handleAiMessage = useCallback((data: any) => {
+   switch (data.type) {
+     case 'connected': setIsAiConnected(true); setIsConnecting(false); break;
+     case 'disconnected': setIsAiConnected(false); setIsConnecting(false); setIsAISpeaking(false); break;
+     case 'response.created': setIsAISpeaking(true); setPartialText(''); break;
+     case 'response.done': setIsAISpeaking(false); break;
+     case "conversation.item.input_audio_transcription.completed":
+       setConversationLog(prev => [...prev, { role: 'user', text: data.transcript }]);
+       break;
+     case "response.text.delta": setPartialText(prev => prev + data.delta); break;
+     case "response.text.done":
+       setConversationLog(prev => [...prev, { role: 'ai', text: data.text }]);
+       setPartialText('');
+       break;
+     case "error":
+       alert(`AIエラー: ${data.error?.message || '不明なエラー'}`);
+       setIsConnecting(false);
+       setIsAiConnected(false);
+       break;
+   }
+ }, []);
+
+
+ const fetchAllFolders = useCallback(async () => {
+   try {
+     const rootFolders = await firebaseMaterialsService.getFolders();
+     let allFoldersData: MaterialFolder[] = [...rootFolders];
+     for (const folder of rootFolders) {
+       const childFolders = await loadChildFolders(folder.id, allFoldersData);
+       allFoldersData.push(...childFolders);
+     }
+     setAllFolders(allFoldersData);
+   } catch (error) { console.error('フォルダ取得エラー:', error); }
+ }, []);
+
+
+ const loadChildFolders = async (parentId: string, currentFolders: MaterialFolder[]): Promise<MaterialFolder[]> => {
+   try {
+     const childFolders = await firebaseMaterialsService.getChildFolders(parentId)
+     let allChildren: MaterialFolder[] = [...childFolders]
+     for (const child of childFolders) {
+       const grandChildren = await loadChildFolders(child.id, [...currentFolders, ...allChildren])
+       allChildren = [...allChildren, ...grandChildren]
+     }
+     return allChildren
+   } catch (error) {
+     console.error(`子フォルダ取得エラー (parentId: ${parentId}):`, error)
+     return []
+   }
+ };
+
+
+ const fetchFiles = useCallback(async (folderId: string | null) => {
+   try {
+     const filesData = folderId ? await firebaseMaterialsService.getFiles(folderId) : [];
+     setFiles(filesData);
+   } catch (error) { console.error('ファイル取得エラー:', error); setFiles([]); }
+ }, []);
+  const generateBreadcrumbs = useCallback((folder: MaterialFolder | null) => {
+   if (!folder) { setBreadcrumbs([]); return; }
+   const newBreadcrumbs: MaterialFolder[] = [];
+   let currentItem: MaterialFolder | undefined = folder;
+   while (currentItem) {
+     newBreadcrumbs.unshift(currentItem);
+     currentItem = allFolders.find(f => f.id === currentItem?.parentId);
+   }
+   setBreadcrumbs(newBreadcrumbs);
+ }, [allFolders]);
+
+
+ const handleFolderClick = useCallback((folder: MaterialFolder) => {
+   setCurrentFolder(folder);
+   fetchFiles(folder.id);
+   generateBreadcrumbs(folder);
+ }, [allFolders, fetchFiles, generateBreadcrumbs]);
+
+
+ const handleNavigateToRoot = useCallback(() => {
+   setCurrentFolder(null);
+   fetchFiles(null);
+   setBreadcrumbs([]);
+ }, [fetchFiles]);
+
+
+ useEffect(() => {
+   fetchAllFolders();
+   const autoConnect = localStorage.getItem('autoConnectWebRTC');
+   if (autoConnect === 'true') {
+     localStorage.removeItem('autoConnectWebRTC');
+     setTimeout(() => startConnection(), 1000);
+   }
+ }, [fetchAllFolders]);
+
+
+ useEffect(() => {
+   if (allFolders.length > 0 && !currentFolder) {
+     fetchFiles(null)
+   }
+ }, [allFolders, currentFolder, fetchFiles]);
+
+
+ const startConnection = useCallback(async () => {
+   if (isConnecting || isAiConnected) return;
+   setIsConnecting(true);
+   const client = new WebRTCRealtimeClient('break_session', handleAiMessage, () => {});
+   setAiClient(client);
+   try {
+     await client.connect();
+   } catch (error) {
+     console.error('Connection failed:', error);
+     setIsConnecting(false);
+   }
+ }, [isConnecting, isAiConnected, handleAiMessage]);
+
+
+ const sendMaterialToAI = useCallback(async () => {
+   if (!selectedMaterial || !aiClient || !isAiConnected) return;
   
-  // 教材選択関連
-  const [allFolders, setAllFolders] = useState<MaterialFolder[]>([])
-  const [currentFolder, setCurrentFolder] = useState<MaterialFolder | null>(null)
-  const [files, setFiles] = useState<MaterialFile[]>([])
-  const [selectedMaterial, setSelectedMaterial] = useState<MaterialFile | null>(null)
-  const [breadcrumbs, setBreadcrumbs] = useState<MaterialFolder[]>([])
-  
-  // フリック操作関連
-  const [currentFileIndex, setCurrentFileIndex] = useState(0)
-  const [touchStart, setTouchStart] = useState<{ x: number, y: number } | null>(null)
-  const [touchEnd, setTouchEnd] = useState<{ x: number, y: number } | null>(null)
+   let materialContent = ''
+   if (selectedMaterial.type === 'text') {
+       try {
+           const content = await firebaseMaterialsService.getTextContent(selectedMaterial.id);
+           materialContent = content;
+       } catch (e) {
+           console.error("Failed to fetch text content for AI");
+       }
+   }
 
-  // 教材管理ロジック
-  const fetchAllFolders = async () => {
-    try {
-      const rootFolders = await firebaseMaterialsService.getFolders()
-      const allFoldersData: MaterialFolder[] = [...rootFolders]
-      
-      for (const folder of rootFolders) {
-        const childFolders = await loadChildFolders(folder.id, allFoldersData)
-        allFoldersData.push(...childFolders)
-      }
-      
-      setAllFolders(allFoldersData)
-    } catch (error) {
-      console.error('フォルダ取得エラー:', error)
-    }
-  }
 
-  const loadChildFolders = async (parentId: string, currentFolders: MaterialFolder[]): Promise<MaterialFolder[]> => {
-    try {
-      const childFolders = await firebaseMaterialsService.getChildFolders(parentId)
-      const allChildren: MaterialFolder[] = [...childFolders]
-      
-      for (const child of childFolders) {
-        const grandChildren = await loadChildFolders(child.id, [...currentFolders, ...allChildren])
-        allChildren.push(...grandChildren)
-      }
-      
-      return allChildren
-    } catch (error) {
-      console.error(`子フォルダ取得エラー (parentId: ${parentId}):`, error)
-      return []
-    }
-  }
+   await aiClient.sendMaterial(selectedMaterial, materialContent);
+ }, [selectedMaterial, aiClient, isAiConnected]);
 
-  const fetchFiles = async (folderId: string | null) => {
-    if (!folderId) {
-      setFiles([])
-      return
-    }
 
-    try {
-      const filesData = await firebaseMaterialsService.getFiles(folderId)
-      setFiles(filesData)
-    } catch (error) {
-      console.error('ファイル取得エラー:', error)
-    }
-  }
+ const handleKeyDown = useCallback((e: KeyboardEvent) => {
+   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+   switch (e.key) {
+     case 'ArrowRight': e.preventDefault(); if (currentItems.length > 0) setCurrentItemIndex(i => (i + 1) % currentItems.length); break;
+     case 'ArrowLeft': e.preventDefault(); if (currentItems.length > 0) setCurrentItemIndex(i => (i - 1 + currentItems.length) % currentItems.length); break;
+     case 'ArrowUp': {
+       e.preventDefault();
+       const parent = currentFolder ? allFolders.find(f => f.id === currentFolder.parentId) : null;
+       if (parent) handleFolderClick(parent);
+       else if (currentFolder) handleNavigateToRoot();
+       break;
+     }
+     case 'ArrowDown': {
+       e.preventDefault();
+       const item = currentItems[currentItemIndex];
+       if (item && 'parentId' in item) handleFolderClick(item as MaterialFolder);
+       break;
+     }
+   }
+ }, [currentItemIndex, currentItems, currentFolder, allFolders, handleFolderClick, handleNavigateToRoot]);
 
-  // パンくずリスト生成
-  const generateBreadcrumbs = (folder: MaterialFolder | null) => {
-    if (!folder) return []
-    
-    const breadcrumbs: MaterialFolder[] = []
-    let currentItem: MaterialFolder | undefined = folder
-    
-    while (currentItem) {
-      breadcrumbs.unshift(currentItem)
-      currentItem = allFolders.find(f => f.id === currentItem?.parentId)
-    }
-    
-    setBreadcrumbs(breadcrumbs)
-    return breadcrumbs
-  }
 
-  // フォルダナビゲーション
-  const handleFolderClick = (folder: MaterialFolder) => {
-    setCurrentFolder(folder)
-    fetchFiles(folder.id)
-    generateBreadcrumbs(folder)
-  }
-
-  const handleNavigateToRoot = () => {
-    setCurrentFolder(null)
-    fetchFiles(null)
-    setBreadcrumbs([])
-  }
-
-  // 教材選択
-  const handleMaterialSelect = (file: MaterialFile) => {
-    setSelectedMaterial(file)
-  }
-
-  // フリック操作のハンドラ（Study.tsxと同じロジック）
-  const handleTouchStart = (e: React.TouchEvent) => {
-    e.preventDefault()
-    setTouchEnd(null)
-    setTouchStart({
-      x: e.targetTouches[0].clientX,
-      y: e.targetTouches[0].clientY
-    })
-  }
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    e.preventDefault()
-    setTouchEnd({
-      x: e.targetTouches[0].clientX,
-      y: e.targetTouches[0].clientY
-    })
-  }
-
-  const handleTouchEnd = () => {
-    if (!touchStart || !touchEnd) return
-
-    const distanceX = touchStart.x - touchEnd.x
-    const distanceY = touchStart.y - touchEnd.y
-    const isLeftSwipe = distanceX > 50
-    const isRightSwipe = distanceX < -50
-    const isUpSwipe = distanceY > 50
-    const isDownSwipe = distanceY < -50
-
-    // 横フリック：同階層のファイル間移動
-    if (Math.abs(distanceX) > Math.abs(distanceY)) {
-      if (isLeftSwipe && files.length > 0) {
-        const nextIndex = (currentFileIndex + 1) % files.length
-        setCurrentFileIndex(nextIndex)
-        setSelectedMaterial(files[nextIndex])
-      } else if (isRightSwipe && files.length > 0) {
-        const prevIndex = currentFileIndex === 0 ? files.length - 1 : currentFileIndex - 1
-        setCurrentFileIndex(prevIndex)
-        setSelectedMaterial(files[prevIndex])
-      }
-    }
-    // 縦フリック：階層間移動
-    else {
-      if (isUpSwipe && currentFolder) {
-        const parentFolder = allFolders.find(f => f.id === currentFolder.parentId)
-        if (parentFolder) {
-          setCurrentFolder(parentFolder)
-          fetchFiles(parentFolder.id)
-          generateBreadcrumbs(parentFolder)
-        } else {
-          handleNavigateToRoot()
-        }
-      } else if (isDownSwipe && childFolders.length > 0) {
-        const firstChild = childFolders[0]
-        handleFolderClick(firstChild)
-      }
-    }
-  }
-
-  // ファイル変更時にインデックスをリセット
+ useEffect(() => {
+   const newChildFolders = allFolders.filter(folder => folder.parentId === (currentFolder?.id || null));
+   const items = [...newChildFolders, ...files];
+   setCurrentItems(items);
+   setCurrentItemIndex(0);
+   itemRefs.current = itemRefs.current.slice(0, items.length);
+ }, [currentFolder, files, allFolders]);
   useEffect(() => {
-    setCurrentFileIndex(0)
-    if (files.length > 0) {
-      setSelectedMaterial(files[0])
-    } else {
-      setSelectedMaterial(null)
-    }
-  }, [files])
-
-  // 教材をAIに送信
-  const sendMaterialToAI = async () => {
-    if (!selectedMaterial || !aiClient || !isAiConnected) {
-      alert('教材が選択されていないか、AI接続が確立されていません')
-      return
-    }
-
-    try {
-      console.log('教材をAIに送信:', selectedMaterial)
-      
-      if (selectedMaterial.type === 'text' && selectedMaterial.content) {
-        // テキスト教材の場合：session.updateでシステムメッセージとして設定
-        const sessionUpdateMessage = {
-          type: 'session.update',
-          session: {
-            instructions: `あなたは学習支援AIです。現在、学習者は以下の教材について勉強中です：
-
-【教材名】${selectedMaterial.name}
-【内容】
-${selectedMaterial.content}
-
-この教材について、学習者が理解しやすいよう説明し、質問に答えて、一緒に学習をサポートしてください。学習者が質問していない場合は、この教材について何か分からないことがないか優しく聞いてください。`
-          }
-        }
-        
-        aiClient.sendMessage(sessionUpdateMessage)
-        
-        // 初回挨拶メッセージ
-        const greetingMessage = {
-          type: 'conversation.item.create',
-      item: {
-            type: 'message',
-            role: 'user',
-        content: [
-          {
-                type: 'text',
-                text: `こんにちは！今「${selectedMaterial.name}」について勉強しています。この教材について一緒に学習しませんか？`
-              }
-            ]
-          }
-        }
-        
-        aiClient.sendMessage(greetingMessage)
-        
-      } else if (selectedMaterial.type === 'image') {
-        // 画像教材の場合：通常のメッセージとして送信
-        const message = {
-          type: 'conversation.item.create',
-      item: {
-            type: 'message',
-            role: 'user',
-        content: [
-          {
-                type: 'text',
-                text: `こんにちは！今「${selectedMaterial.name}」という画像教材について勉強しています。3D空間に表示されている画像について、何か質問があったら教えてください。`
-              }
-            ]
-          }
-        }
-        
-        aiClient.sendMessage(message)
-      }
-
-      // 会話生成のリクエスト
-      const responseRequest = {
-        type: 'response.create',
-        response: {
-          modalities: ['text', 'audio']
-        }
-      }
-
-      aiClient.sendMessage(responseRequest)
-      
-      const materialType = selectedMaterial.type === 'text' ? 'テキスト' : '画像'
-      alert(`${materialType}教材「${selectedMaterial.name}」をAIに送信しました！`)
-      
-    } catch (error) {
-      console.error('教材送信エラー:', error)
-      alert('教材の送信に失敗しました')
-    }
-  }
-
-  // AI応答のメッセージハンドラ
-  const handleAiMessage = async (message: any) => {
-    console.log('AI message:', message)
-    
-    switch (message.type) {
-      case 'connected':
-      setIsAiConnected(true)
-        setIsConnecting(false)
-        break
-        
-      case 'user_transcription':
-        break
-        
-      case 'ai_response_started':
-        setIsAISpeaking(true)
-        setPartialText('')
-        break
-        
-      case 'ai_text_delta':
-        setPartialText(prev => prev + message.content)
-        break
-        
-      case 'ai_text_done':
-        setPartialText('')
-        break
-        
-      case 'ai_response_completed':
-        setIsAISpeaking(false)
-        setPartialText('')
-        break
-        
-      case 'disconnected':
-      setIsAiConnected(false)
-        setIsConnecting(false)
-        setIsAISpeaking(false)
-        setPartialText('')
-        break
-    }
-  }
-
-  const handleAiAudio = (audioData: string) => {
-    console.log('AI音声データ受信:', audioData.length)
-  }
-
-  // 設定読み込みと初期化
+   const item = currentItems[currentItemIndex];
+   if (item && 'type' in item) {
+       setSelectedMaterial(item as MaterialFile);
+       // テキストファイルの場合は内容を取得
+       if ((item as MaterialFile).type === 'text') {
+         setIsContentLoading(true);
+         firebaseMaterialsService.getTextContent((item as MaterialFile).id)
+           .then(content => {
+             setTextContent(content);
+             setIsContentLoading(false);
+           })
+           .catch(error => {
+             console.error('テキスト内容取得エラー:', error);
+             setTextContent(null);
+             setIsContentLoading(false);
+           });
+       } else {
+         setTextContent(null);
+       }
+       } else {
+       setSelectedMaterial(null);
+       setTextContent(null);
+   }
+ }, [currentItemIndex, currentItems]);
   useEffect(() => {
-    const savedSettings = localStorage.getItem('studySettings')
-    if (savedSettings) {
-      const parsedSettings = JSON.parse(savedSettings)
-      setSettings(parsedSettings)
-    }
-    
-    // 選択された教材を読み込み
-    const savedMaterial = localStorage.getItem('selectedMaterial')
-    if (savedMaterial) {
-      try {
-        const material = JSON.parse(savedMaterial)
-        setSelectedMaterial(material)
-        console.log('📚 Study画面から教材を引き継ぎ:', material)
-      } catch (error) {
-        console.error('教材データの読み込みエラー:', error)
-      }
-    }
-    
-    // 教材フォルダを取得
-    fetchAllFolders()
-    fetchFiles(null)
-    
-    // breakIdを生成
-    const generatedBreakId = `break_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-    setBreakId(generatedBreakId)
-    
-    // 自動WebRTC接続をチェック
-    const autoConnect = localStorage.getItem('autoConnectWebRTC')
-    if (autoConnect === 'true') {
-      console.log('🚀 自動WebRTC接続を開始')
-      localStorage.removeItem('autoConnectWebRTC')
-      setTimeout(() => {
-        startConnection()
-      }, 1000)
-    }
-  }, [])
+   const container = scrollContainerRef.current;
+   const item = itemRefs.current[currentItemIndex];
+   if (container && item) {
+       const scrollLeft = item.offsetLeft - (container.offsetWidth / 2) + (item.offsetWidth / 2);
+       container.scrollTo({ left: scrollLeft, behavior: 'smooth' });
+   }
+ }, [currentItemIndex]);
 
-  // WebRTC Realtime AI接続
-  const startConnection = async () => {
-    if (isConnecting || isAiConnected) return
-    
-    setIsConnecting(true)
-    const client = new WebRTCRealtimeClient(breakId, handleAiMessage, handleAiAudio)
-      setAiClient(client)
-    
-    try {
-      await client.connect()
-    } catch (error) {
-      console.error('Connection failed:', error)
-      setIsConnecting(false)
-    }
-  }
 
-  // const stopConnection = () => {
-  //   if (aiClient) {
-  //     aiClient.disconnect()
-  //     setAiClient(null)
-  //   }
-  //   setIsAiConnected(false)
-  //   setIsConnecting(false)
-  //   setIsAISpeaking(false)
-  // }
-
-  // Webカメラを開始
+ useEffect(() => {
+   conversationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+ }, [conversationLog, partialText]);
   useEffect(() => {
-    const startCamera = async () => {
-      try {
-        const mediaStream = await navigator.mediaDevices.getUserMedia({ 
-          video: true, 
-          audio: false 
-        })
-        setStream(mediaStream)
-        if (videoRef.current) {
-          videoRef.current.srcObject = mediaStream
-        }
-      } catch (error) {
-        console.error('カメラアクセスエラー:', error)
-      }
-    }
+   window.addEventListener('keydown', handleKeyDown);
+   return () => window.removeEventListener('keydown', handleKeyDown);
+ }, [handleKeyDown]);
 
-    startCamera()
 
-    return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop())
-      }
-    }
-  }, [])
+ useEffect(() => {
+   const startCamera = async () => {
+     try {
+       const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+       setStream(mediaStream)
+       if (videoRef.current) videoRef.current.srcObject = mediaStream
+     } catch (error) { console.error('カメラアクセスエラー:', error) }
+   }
+   startCamera();
+   return () => stream?.getTracks().forEach(track => track.stop());
+ }, []);
 
-  // タイマー機能
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setBreakElapsedTime(prev => prev + 1)
-    }, 1000)
 
-    return () => clearInterval(timer)
-  }, [])
+ useEffect(() => {
+   const timer = setInterval(() => setBreakElapsedTime(prev => prev + 1), 1000);
+   return () => clearInterval(timer);
+ }, []);
 
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
-  }
 
-  // 現在のフォルダの子フォルダ
-  const childFolders = allFolders.filter(folder => 
-    folder.parentId === (currentFolder?.id || null)
-  )
+ const formatTime = (seconds: number) => {
+   const mins = Math.floor(seconds / 60);
+   const secs = seconds % 60;
+   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+ };
 
-  return (
-    <div style={{
-      width: '100vw',
-      height: '100vh',
-      display: 'flex',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
-    }}>
-      {/* 左側：教材選択エリア */}
-      <div style={{
-        width: '300px', 
-        padding: '20px',
-        background: 'rgba(255, 255, 255, 0.1)',
-        backdropFilter: 'blur(10px)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '20px'
-      }}>
-        {/* Webカメラ */}
-        <div style={{
-          background: 'rgba(255, 255, 255, 0.15)',
-          borderRadius: '16px',
-          padding: '16px',
-          border: '1px solid rgba(255, 255, 255, 0.2)'
-        }}>
-          <h3 style={{ 
-            margin: '0 0 12px 0', 
-            color: 'white', 
-            fontSize: '16px',
-            textAlign: 'center'
-          }}>
-            Webカメラ
-          </h3>
-          <div style={{
-            width: '100%',
-            height: '150px',
-            background: '#000',
-            borderRadius: '12px',
-            overflow: 'hidden',
-            position: 'relative'
-          }}>
-        <video
-          ref={videoRef}
-          autoPlay
-          muted
-          style={{
-            width: '100%',
-                height: '100%',
-                objectFit: 'cover'
-                  }}
-                />
-              </div>
-              </div>
-        
-        {/* 経過時間 */}
-        <div style={{
-          background: 'rgba(255, 255, 255, 0.15)',
-          borderRadius: '16px',
-          padding: '20px',
-          border: '1px solid rgba(255, 255, 255, 0.2)',
-          textAlign: 'center'
-        }}>
-          <h3 style={{ 
-            margin: '0 0 8px 0', 
-            color: 'white', 
-            fontSize: '16px'
-          }}>
-            経過時間
-          </h3>
-              <div style={{
-            fontSize: '24px', 
-            fontWeight: 'bold', 
-            color: 'white',
-            fontFamily: 'monospace'
-          }}>
-            {formatTime(breakElapsedTime)}
-          </div>
-              </div>
-              
-        {/* フリック対応 階層ナビゲーション */}
-        <div 
-                  style={{
-            background: 'rgba(255, 255, 255, 0.15)',
-            borderRadius: '16px',
-            padding: '16px',
-            border: '1px solid rgba(255, 255, 255, 0.2)',
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            touchAction: 'none'
-          }}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
-        >
-          <h3 style={{ 
-            margin: '0 0 12px 0', 
-            color: 'white', 
-            fontSize: '16px'
-          }}>
-            教材選択
-            <span style={{ fontSize: '12px', opacity: 0.7 }}>
-              (フリックで移動)
-            </span>
-          </h3>
-          
-          {/* 現在の位置とファイル表示 */}
-        <div style={{
-            background: 'rgba(255, 255, 255, 0.1)',
-          borderRadius: '8px',
-            padding: '8px 12px',
-            marginBottom: '12px',
-            fontSize: '12px',
-            color: 'white'
-          }}>
-            <div style={{ marginBottom: '4px' }}>
-              📍 {breadcrumbs.length > 0 ? breadcrumbs.map(folder => folder.name).join(' > ') : 'ルート'}
-          </div>
-            <div style={{ fontSize: '10px', opacity: 0.7 }}>
-              📁 {childFolders.length}フォルダ | 📄 {files.length}ファイル
-              {files.length > 0 && selectedMaterial && (
-                <span> | 選択中: {currentFileIndex + 1}/{files.length}</span>
-              )}
-            </div>
-        </div>
 
-          {/* 現在選択中の教材 */}
-          {selectedMaterial && (
-        <div style={{
-              background: 'rgba(59, 130, 246, 0.2)',
-              border: '1px solid rgba(59, 130, 246, 0.4)',
-          borderRadius: '12px',
-              padding: '16px',
-              marginBottom: '16px'
-        }}>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-                gap: '8px',
-                marginBottom: '8px'
-            }}>
-                <span style={{ fontSize: '20px' }}>
-                  {selectedMaterial.type === 'text' ? '📄' : '🖼️'}
-                </span>
-                <div>
-              <div style={{
-                    fontSize: '14px', 
-                    fontWeight: '600', 
-                    color: 'white'
-                  }}>
-                    {selectedMaterial.name}
-          </div>
-            <div style={{
-                    fontSize: '11px', 
-                    color: 'rgba(255, 255, 255, 0.7)'
-                  }}>
-                    {selectedMaterial.type === 'text' ? 'テキスト教材' : '画像教材'} (3D表示中)
-            </div>
-        </div>
-        </div>
-          </div>
-        )}
+ const parentFolder = currentFolder ? allFolders.find(f => f.id === currentFolder.parentId) : null;
+ const selectedItem = currentItems.length > 0 ? currentItems[currentItemIndex] : null;
+ const isSelectedItemFolder = selectedItem && 'parentId' in selectedItem;
 
-          {/* パンくずリスト */}
-          <div style={{
-            display: 'flex', 
-            alignItems: 'center', 
-            gap: '4px',
-            marginBottom: '12px',
-            fontSize: '12px',
-            flexWrap: 'wrap'
-          }}>
-        <button
-              onClick={handleNavigateToRoot}
-          style={{
-                background: 'rgba(255, 255, 255, 0.2)',
-                border: '1px solid rgba(255, 255, 255, 0.3)',
-                borderRadius: '6px',
-            color: 'white',
-                cursor: 'pointer',
-                padding: '2px 6px',
-                fontSize: '10px'
-          }}
-        >
-              🏠 ルート
-        </button>
-            
-            {breadcrumbs.map((folder, index) => (
-              <div key={folder.id} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>/</span>
-            <button
-                  onClick={() => handleFolderClick(folder)}
-              style={{
-                    background: index === breadcrumbs.length - 1 ? 'rgba(59, 130, 246, 0.3)' : 'rgba(255, 255, 255, 0.1)',
-                    border: '1px solid rgba(255, 255, 255, 0.3)',
-                borderRadius: '6px',
-                    color: 'white',
-                    cursor: index === breadcrumbs.length - 1 ? 'default' : 'pointer',
-                    padding: '2px 6px',
-                    fontSize: '10px',
-                    fontWeight: index === breadcrumbs.length - 1 ? '600' : '400'
-                  }}
-                >
-                  {folder.name}
-            </button>
-          </div>
-            ))}
-          </div>
 
-          {/* フォルダ一覧 */}
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            {childFolders.length > 0 && (
-              <div style={{ marginBottom: '16px' }}>
-                <h4 style={{ 
-                  margin: '0 0 8px 0', 
-                  fontSize: '14px', 
-                  color: 'white' 
-                }}>
-                  📂 フォルダ
-                </h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {childFolders.slice(0, 3).map((folder) => (
-                    <div
-                      key={folder.id}
-                      onClick={() => handleFolderClick(folder)}
-              style={{
-                        padding: '8px 12px',
-                        background: 'rgba(255, 255, 255, 0.1)',
-                        border: '1px solid rgba(255, 255, 255, 0.2)',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                        transition: 'all 0.3s ease',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px'
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)'
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'
-                      }}
-                    >
-                      <span>📁</span>
-                      <span style={{ fontSize: '12px', color: 'white', fontWeight: '500' }}>
-                        {folder.name}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+ return (
+   <div style={{ width: '100vw', height: '100vh', display: 'flex', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+     {/* Left Panel */}
+     <div style={{ width: '300px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+       <div style={{ background: 'rgba(255, 255, 255, 0.15)', borderRadius: '16px', padding: '16px', border: '1px solid rgba(255, 255, 255, 0.2)' }}>
+         <h3 style={{ margin: '0 0 12px 0', color: 'white', fontSize: '16px', textAlign: 'center' }}>Webカメラ</h3>
+         <div style={{ width: '100%', height: '150px', background: '#000', borderRadius: '12px', overflow: 'hidden' }}>
+           <video ref={videoRef} autoPlay muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+             </div>
+             </div>
+       <div style={{ background: 'rgba(255, 255, 255, 0.15)', borderRadius: '16px', padding: '20px', border: '1px solid rgba(255, 255, 255, 0.2)', textAlign: 'center' }}>
+         <h3 style={{ margin: '0 0 8px 0', color: 'white', fontSize: '16px' }}>休憩時間</h3>
+         <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'white', fontFamily: 'monospace' }}>{formatTime(breakElapsedTime)}</div>
+           </div>
+       <div ref={interactionPanelRef} style={{ flex: 1, background: 'rgba(255, 255, 255, 0.15)', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+         <h3 style={{ margin: '0 0 8px 0', color: 'white', fontSize: '16px', flexShrink: 0 }}>教材で話す</h3>
+         <div style={{ marginBottom: '8px', fontSize: '12px', color: 'white', wordBreak: 'break-all', flexShrink: 0 }}>📍 {breadcrumbs.map(f => f.name).join(' / ') || 'ルート'}</div>
+         <div onClick={() => parentFolder ? handleFolderClick(parentFolder) : (currentFolder && handleNavigateToRoot())} style={{ textAlign: 'center', padding: '4px 0', fontSize: '12px', color: 'rgba(255, 255, 255, 0.8)', opacity: currentFolder ? 1 : 0.4, cursor: currentFolder ? 'pointer' : 'default', borderBottom: '1px solid rgba(255, 255, 255, 0.1)', marginBottom: '5px' }}>
+           <span>↑ {parentFolder ? parentFolder.name : (currentFolder ? 'ルートに戻る' : '')}</span>
+         </div>
+         <div ref={scrollContainerRef} className="no-scrollbar" style={{ display: 'flex', alignItems: 'center', overflowX: 'auto', padding: '10px 0' }}>
+           {currentItems.length > 0 ? (
+             <div style={{ display: 'flex', padding: `0 calc(50% - 50px)` }}>
+               {currentItems.map((item, index) => (
+                 <div ref={(el) => { itemRefs.current[index] = el; }} key={item.id} onClick={() => setCurrentItemIndex(index)} style={{ padding: '10px', background: index === currentItemIndex ? 'rgba(59, 130, 246, 0.4)' : 'rgba(255, 255, 255, 0.05)', border: `2px solid ${index === currentItemIndex ? 'rgba(59, 130, 246, 0.7)' : 'transparent'}`, borderRadius: '12px', margin: '0 5px', transition: 'all 0.3s ease', transform: index === currentItemIndex ? 'scale(1.08)' : 'scale(0.95)', opacity: index === currentItemIndex ? 1 : 0.7, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', flexShrink: 0, width: '90px', height: '90px', cursor: 'pointer' }}>
+                   <span style={{ fontSize: '32px' }}>{'parentId' in item ? '📁' : (item.type === 'text' ? '📄' : '🖼️')}</span>
+                   <span style={{ color: 'white', fontWeight: '500', fontSize: '12px', textAlign: 'center', width: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
+         </div>
+               ))}
+       </div>
+           ) : <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.7)', width: '100%' }}><p>空のフォルダ</p></div>}
+         </div>
+         <div onClick={() => isSelectedItemFolder && handleFolderClick(selectedItem as MaterialFolder)} style={{ textAlign: 'center', padding: '4px 0', fontSize: '12px', color: 'rgba(255, 255, 255, 0.8)', height: '20px', opacity: isSelectedItemFolder ? 1 : 0.4, cursor: isSelectedItemFolder ? 'pointer' : 'default', borderTop: '1px solid rgba(255, 255, 255, 0.1)', marginTop: '5px' }}>
+           {isSelectedItemFolder && selectedItem ? <span>↓ {selectedItem.name} を開く</span> : <span></span>}
+         </div>
+         <button onClick={sendMaterialToAI} disabled={!isAiConnected || !selectedMaterial} style={{ width: '100%', padding: '10px', background: isAiConnected && selectedMaterial ? 'rgba(16, 185, 129, 0.8)' : 'rgba(107, 114, 128, 0.5)', color: 'white', border: 'none', borderRadius: '12px', cursor: isAiConnected && selectedMaterial ? 'pointer' : 'not-allowed', fontSize: '14px', fontWeight: '600', marginTop: '10px' }}>AIに送信</button>
+           </div>
+       </div>
 
-            {/* ファイル一覧 */}
-            {files.length > 0 && (
-              <div>
-                <h4 style={{ 
-                  margin: '0 0 8px 0', 
-                fontSize: '14px',
-                  color: 'white' 
-                }}>
-                  📄 教材
-                </h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {files.slice(0, 5).map((file) => (
-                    <div
-                      key={file.id}
-                      onClick={() => handleMaterialSelect(file)}
-                      style={{
-                        padding: '8px 12px',
-                        background: selectedMaterial?.id === file.id ? 'rgba(59, 130, 246, 0.3)' : 'rgba(255, 255, 255, 0.08)',
-                        border: selectedMaterial?.id === file.id ? '1px solid rgba(59, 130, 246, 0.5)' : '1px solid rgba(255, 255, 255, 0.15)',
-                        borderRadius: '8px',
-                        cursor: 'pointer',
-                        transition: 'all 0.3s ease',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px'
-                      }}
-                      onMouseEnter={(e) => {
-                        if (selectedMaterial?.id !== file.id) {
-                          e.currentTarget.style.background = 'rgba(255, 255, 255, 0.15)'
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        if (selectedMaterial?.id !== file.id) {
-                          e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)'
-                        }
-                      }}
-                    >
-                      <span>{file.type === 'text' ? '📄' : '🖼️'}</span>
-                      <span style={{ fontSize: '12px', color: 'white', fontWeight: '500' }}>
-                        {file.name}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-          </div>
-        )}
 
-            {/* 送信ボタン */}
-            {selectedMaterial && (
-              <div style={{ marginTop: '16px' }}>
-          <button
-                  onClick={sendMaterialToAI}
-                  disabled={!isAiConnected}
-            style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    background: isAiConnected ? 'rgba(16, 185, 129, 0.8)' : 'rgba(107, 114, 128, 0.5)',
-              color: 'white',
-              border: 'none',
-                    borderRadius: '12px',
-                    cursor: isAiConnected ? 'pointer' : 'not-allowed',
-                    fontSize: '14px',
-                    fontWeight: '600',
-                    transition: 'all 0.3s ease',
-                    backdropFilter: 'blur(10px)'
-                  }}
-                  onMouseEnter={(e) => {
-                    if (isAiConnected) {
-                      e.currentTarget.style.background = 'rgba(16, 185, 129, 1)'
-                      e.currentTarget.style.transform = 'translateY(-2px)'
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (isAiConnected) {
-                      e.currentTarget.style.background = 'rgba(16, 185, 129, 0.8)'
-                      e.currentTarget.style.transform = 'translateY(0)'
-                    }
-                  }}
-                >
-                  📤 送信
-          </button>
-                {!isAiConnected && (
-                  <p style={{ 
-                    margin: '8px 0 0 0', 
-                    fontSize: '12px', 
-                    color: 'rgba(239, 68, 68, 0.8)',
-                    textAlign: 'center'
-                  }}>
-                    AI接続中...
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* 右側：TalkAnimationエリア */}
-      <div style={{ 
-        flex: 1, 
-        position: 'relative',
-        display: 'flex',
-        flexDirection: 'column'
-      }}>
-        <TalkAnimation selectedMaterial={selectedMaterial} />
-        
-        {/* AI接続状態表示 */}
-        <div style={{
-          position: 'absolute',
-          top: '20px',
-          left: '20px',
-          zIndex: 10,
-          background: 'rgba(255, 255, 255, 0.9)',
-          borderRadius: '12px',
-          padding: '12px 16px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1)'
-        }}>
-          <div style={{
-            width: '10px',
-            height: '10px',
-            borderRadius: '50%',
-            background: isAiConnected ? '#10b981' : isConnecting ? '#f59e0b' : '#ef4444'
-          }} />
-          <span style={{ 
-            fontSize: '14px', 
-            fontWeight: '600',
-            color: '#333'
-          }}>
-            {isAiConnected ? 'AI接続中' : isConnecting ? '接続中...' : 'AI未接続'}
-          </span>
-        </div>
-
-        {/* AI接続ボタン（未接続時のみ） */}
-        {!isAiConnected && !isConnecting && (
-          <div style={{
-            position: 'absolute',
-            top: '20px',
-            right: '20px',
-            zIndex: 10
-          }}>
-          <button
-              onClick={startConnection}
-            style={{
-                padding: '12px 24px',
-                background: 'rgba(16, 185, 129, 0.8)',
-              color: 'white',
-              border: 'none',
-                borderRadius: '16px',
-              cursor: 'pointer',
-                fontSize: '14px',
-                fontWeight: '600',
-                backdropFilter: 'blur(10px)',
-                transition: 'all 0.3s ease'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'rgba(16, 185, 129, 1)'
-                e.currentTarget.style.transform = 'translateY(-2px)'
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'rgba(16, 185, 129, 0.8)'
-                e.currentTarget.style.transform = 'translateY(0)'
-              }}
-            >
-              AI接続開始
-            </button>
-          </div>
-        )}
-
-        {/* Study画面に戻るボタン */}
-        <div style={{
-          position: 'absolute',
-          top: '80px',
-          right: '20px',
-          zIndex: 10
-        }}>
-          <button
-            onClick={() => navigate('/study')}
-            style={{
-              padding: '12px 24px',
-              background: 'rgba(255, 255, 255, 0.2)',
-              color: 'white',
-              border: '1px solid rgba(255, 255, 255, 0.3)',
-              borderRadius: '16px',
-              cursor: 'pointer',
-              fontSize: '14px',
-              fontWeight: '600',
-              backdropFilter: 'blur(10px)',
-              transition: 'all 0.3s ease'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)'
-              e.currentTarget.style.transform = 'translateY(-2px)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)'
-              e.currentTarget.style.transform = 'translateY(0)'
-            }}
-          >
-            勉強に戻る
-          </button>
-      </div>
-
-        {/* AI音声インジケーター */}
-        {isAISpeaking && (
-        <div style={{
-          position: 'absolute',
-            bottom: '80px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            background: 'rgba(16, 185, 129, 0.9)',
-          color: 'white',
-            padding: '12px 24px',
-            borderRadius: '24px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            fontSize: '14px',
-            fontWeight: '600',
-            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.2)'
-          }}>
-            <div style={{
-              width: '8px',
-              height: '8px',
-              background: 'white',
-              borderRadius: '50%',
-              animation: 'pulse 1s infinite'
-            }}></div>
-            🤖 キャラクターが話しています...
-          </div>
-        )}
-
-        {/* 部分的なテキスト表示 */}
-        {partialText && (
-        <div style={{
-          position: 'absolute',
-            bottom: '140px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            background: 'rgba(59, 130, 246, 0.9)',
-          color: 'white',
-            padding: '16px 24px',
-            borderRadius: '16px',
-            maxWidth: '600px',
-            fontSize: '14px',
-            fontWeight: '500',
-            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.2)',
-            fontStyle: 'italic'
-          }}>
-            💭 {partialText}...
-          </div>
-        )}
-
-        {/* 選択教材の表示 */}
-        {selectedMaterial && (
-          <div style={{
-            position: 'absolute',
-            bottom: '20px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            background: 'rgba(255, 255, 255, 0.9)',
-            borderRadius: '16px',
-            padding: '16px 20px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.2)',
-            maxWidth: '400px'
-          }}>
-            <span style={{ fontSize: '20px' }}>
-              {selectedMaterial.type === 'text' ? '📄' : '🖼️'}
-            </span>
-            <div>
-              <div style={{ 
-                fontSize: '14px', 
-                fontWeight: '600', 
-                color: '#333',
-                marginBottom: '4px'
-              }}>
-                選択中: {selectedMaterial.name}
-        </div>
-              <div style={{ 
-                fontSize: '12px', 
-                color: '#666'
-              }}>
-                この教材についてキャラクターと話そう
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
+     {/* Right Panel */}
+     <div style={{ flex: 1, position: 'relative', display: 'flex' }}>
+       <div style={{ flex: 1, position: 'relative' }}>
+         <TalkAnimation selectedMaterial={null} />
+       </div>
+       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+         <div style={{ width: '90%', height: '90%', background: 'rgba(0, 0, 0, 0.3)', backdropFilter: 'blur(5px)', borderRadius: '16px', padding: '20px', overflow: 'auto', color: 'white', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+           {conversationLog.map((entry, index) => (
+             <div key={index} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', justifyContent: entry.role === 'user' ? 'flex-end' : 'flex-start' }}>
+               <div style={{ order: entry.role === 'user' ? 2 : 1, fontSize: '24px' }}>{entry.role === 'user' ? '👤' : '🤖'}</div>
+               <p style={{ order: entry.role === 'user' ? 1 : 2, background: entry.role === 'user' ? 'rgba(59, 130, 246, 0.5)' : 'rgba(255, 255, 255, 0.2)', padding: '10px 15px', borderRadius: '12px', margin: 0, maxWidth: '80%' }}>{entry.text}</p>
+             </div>
+           ))}
+       {isAISpeaking && (
+             <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+               <div style={{ fontSize: '24px' }}>🤖</div>
+               <p style={{ background: 'rgba(255, 255, 255, 0.2)', padding: '10px 15px', borderRadius: '12px', margin: 0, maxWidth: '80%', opacity: 0.8 }}>
+                 {partialText || <span style={{animation: 'pulse 1.5s infinite'}}>...</span>}
+               </p>
+         </div>
+       )}
+           <div ref={conversationEndRef} />
+         </div>
+         </div>
+       <div style={{ position: 'absolute', top: '20px', right: '20px', zIndex: 10 }}>
+         <button onClick={() => navigate('/study')} style={{ padding: '12px 24px', background: 'rgba(255, 255, 255, 0.2)', color: 'white', border: '1px solid rgba(255, 255, 255, 0.3)', borderRadius: '16px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}>勉強に戻る</button>
+         </div>
+       <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 10, background: 'rgba(255, 255, 255, 0.9)', borderRadius: '12px', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1)' }}>
+         <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: isAiConnected ? '#10b981' : isConnecting ? '#f59e0b' : '#ef4444', animation: isConnecting ? 'pulse 1.5s infinite' : 'none' }} />
+         <span style={{ fontSize: '14px', fontWeight: '600', color: '#333' }}>{isAiConnected ? 'AI接続中' : isConnecting ? '接続中...' : 'AI未接続'}</span>
+       </div>
+       {!isAiConnected && !isConnecting && (
+         <div style={{ position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 10 }}>
+           <button onClick={startConnection} style={{ padding: '12px 24px', background: 'rgba(16, 185, 129, 0.8)', color: 'white', border: 'none', borderRadius: '16px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}>AIと話す</button>
+         </div>
+       )}
+     </div>
+   </div>
+ )
 }
