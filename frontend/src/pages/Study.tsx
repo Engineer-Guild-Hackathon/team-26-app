@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import StudyAnimation from 'src/components/StudyAnimation'
 import { type MaterialFolder, type MaterialFile, firebaseMaterialsService } from 'src/services/firebaseMaterials'
 
+
+// --- Original Component Code ---
+
 export default function Study() {
   const navigate = useNavigate()
   const [settings, setSettings] = useState<any>(null)
@@ -22,6 +25,7 @@ export default function Study() {
   const [_faceScore, setFaceScore] = useState(0)
   const [_orientationScore, setOrientationScore] = useState(0)
   const [statusMessage, setStatusMessage] = useState('') // 中央下のメッセージ
+  const [statusHistory, setStatusHistory] = useState<string[]>([]); // 履歴グラフ用の状態
 
   // 教材選択関連の状態
   const [allFolders, setAllFolders] = useState<MaterialFolder[]>([])
@@ -386,10 +390,11 @@ export default function Study() {
     if (savedSettings) {
       const parsedSettings = JSON.parse(savedSettings)
       setSettings(parsedSettings)
-      const pomodoroSeconds = parsedSettings.pomodoroTime * 60
+      const pomodoroSeconds = (parsedSettings.pomodoroTime || 25) * 60
       setNextBreakTime(pomodoroSeconds)
     } else {
-      navigate('/study-settings')
+      setSettings({ pomodoroTime: 25 });
+      setNextBreakTime(25 * 60);
     }
   }, [navigate])
 
@@ -438,9 +443,6 @@ export default function Study() {
     let timer: NodeJS.Timeout | null = null
     let cancelled = false
 
-    // ✅ JS版 MediaPipe FaceDetection の detection 形に対応
-    // detection = { boundingBox: {xCenter, yCenter, width, height, ...}, landmarks: [{x,y}, ...] }
-    // ざっくり：鼻の x と枠中心のズレが少ないほど高得点（0〜100）
     const calcOrientationScore = (detection: any) => {
       try {
         const box = detection?.boundingBox
@@ -469,15 +471,29 @@ export default function Study() {
     }
 
     const updateMessage = (face: number, ori: number) => {
+      let newStatusMessage = '';
+      let messageCategory = '';
       if (face === 0) {
-        setStatusMessage('あれ、どっかいっちゃった？')
+        newStatusMessage = 'あれ、どっかいっちゃった？';
+        messageCategory = 'no-face';
       } else if (ori >= 80) {
-        setStatusMessage('しっかり集中してるね')
+        newStatusMessage = 'しっかり集中してるね';
+        messageCategory = 'high-focus';
       } else if (ori >= 30) {
-        setStatusMessage('ちょっと気が逸れちゃってる？')
+        newStatusMessage = 'ちょっと気が逸れちゃってる？';
+        messageCategory = 'mid-focus';
       } else {
-        setStatusMessage('集中切れちゃった？')
+        newStatusMessage = '集中切れちゃった？';
+        messageCategory = 'low-focus';
       }
+      setStatusMessage(newStatusMessage);
+      setStatusHistory(prevHistory => {
+        const newHistory = [...prevHistory, messageCategory];
+        if (newHistory.length > 20) {
+          return newHistory.slice(newHistory.length - 20);
+        }
+        return newHistory;
+      });
     }
 
     const runOnce = async () => {
@@ -499,45 +515,51 @@ export default function Study() {
     ;(async () => {
       console.log('[Concentration] detector setup start')
       if (!stream) {
-        console.log('[Concentration] detector setup skipped: stream is null')
-        return
+        console.log('[Concentration] detector setup skipped: stream is null');
+        return;
       }
-
-      const faceDetection = await import('@mediapipe/face_detection')
-      console.log('[Concentration] importing @mediapipe/face_detection...')
-      detector = new faceDetection.FaceDetection({
-        locateFile: (file: string) =>
-          `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`,
-      })
-      detector.setOptions({
-        model: 'short',
-        minDetectionConfidence: 0.6,
-      })
-
-      detector.onResults((results: any) => {
-        const det = results?.detections?.[0]
-        const detCount = results?.detections?.length ?? 0
-        console.log('[Concentration] onResults: detections=', detCount, det)
-
-        const hasFace = !!det
-        const faceVal = hasFace ? 100 : 0
-        setFaceScore(faceVal)
-
-        if (hasFace) {
-          const ori = calcOrientationScore(det)
-          console.log('[Concentration] orientationScore=', ori)
-          setOrientationScore(ori)
-          updateMessage(faceVal, ori)
-        } else {
-          setOrientationScore(0)
-          updateMessage(0, 0)
+      
+      const scriptId = 'mediapipe-face-detection-script';
+      const initializeDetector = () => {
+        if (!(window as any).FaceDetection) {
+            console.error('FaceDetection not found on window object.');
+            return;
         }
-      })
-
-      // ★ 3秒おきに1フレームだけ推論
-      timer = setInterval(runOnce, 3000)
-      console.log('[Concentration] interval started (3s)')
-      runOnce() // 初回即時
+        detector = new (window as any).FaceDetection({
+          locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`,
+        });
+        detector.setOptions({
+          model: 'short',
+          minDetectionConfidence: 0.6,
+        });
+        detector.onResults((results: any) => {
+          const det = results?.detections?.[0];
+          const hasFace = !!det;
+          const faceVal = hasFace ? 100 : 0;
+          setFaceScore(faceVal);
+          if (hasFace) {
+            const ori = calcOrientationScore(det);
+            setOrientationScore(ori);
+            updateMessage(faceVal, ori);
+          } else {
+            setOrientationScore(0);
+            updateMessage(0, 0);
+          }
+        });
+        timer = setInterval(runOnce, 3000);
+        runOnce();
+      };
+      
+      if (!document.getElementById(scriptId)) {
+        const script = document.createElement('script');
+        script.id = scriptId;
+        script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js';
+        script.crossOrigin = 'anonymous';
+        document.body.appendChild(script);
+        script.onload = initializeDetector;
+      } else {
+        initializeDetector();
+      }
     })()
 
     return () => {
@@ -576,6 +598,29 @@ export default function Study() {
     const secs = seconds % 60
     return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
   }
+  
+  // --- Chart Helper Functions ---
+  const getStatusValue = (status: string) => {
+    switch (status) {
+      case 'high-focus': return 1;
+      case 'mid-focus': return 0.6;
+      case 'low-focus': return 0.3;
+      case 'no-face':
+      default:
+        return 0;
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'high-focus': return '#4ade80'; // Green
+      case 'mid-focus': return '#facc15'; // Yellow
+      case 'low-focus': return '#f87171'; // Red
+      case 'no-face':
+      default:
+        return '#9ca3af'; // Gray
+    }
+  };
 
   const parentFolder = currentFolder ? allFolders.find(f => f.id === currentFolder.parentId) : null;
   const selectedItem = currentItems.length > 0 ? currentItems[currentItemIndex] : null;
@@ -584,6 +629,19 @@ export default function Study() {
   if (!settings) {
     return <div>設定を読み込み中...</div>
   }
+  
+  // --- Chart Drawing Logic ---
+  const chartWidth = 260;
+  const chartHeight = 50;
+  const chartPadding = 5;
+  const points = statusHistory.length > 1 
+    ? statusHistory.map((status, index) => {
+        const x = chartPadding + (index / (statusHistory.length - 1)) * (chartWidth - 2 * chartPadding);
+        const y = chartHeight - chartPadding - (getStatusValue(status) * (chartHeight - 2 * chartPadding));
+        return `${x},${y}`;
+      }).join(' ')
+    : '';
+
 
   return (
     <div style={{
@@ -778,7 +836,7 @@ export default function Study() {
                     }}
                     onClick={() => setCurrentItemIndex(index)}
                   >
-                    <span style={{ fontSize: '32px' }}>{'parentId' in item ? '📁' : (item.type === 'text' ? '📄' : '🖼️')}</span>
+                    <span style={{ fontSize: '32px' }}>{'type' in item ? (item.type === 'text' ? '📄' : '🖼️') : '📁'}</span>
                     <span style={{
               color: 'white',
                         fontWeight: '500',
@@ -827,7 +885,7 @@ export default function Study() {
       <div style={{ flex: 1, position: 'relative', display: 'flex' }}>
         {/* Left side: Animation */}
         <div style={{flex: 1, position: 'relative'}}>
-          <StudyAnimation selectedMaterial={null} textContent={null} />
+          <StudyAnimation selectedMaterial={selectedMaterial} textContent={textContent} />
         </div>
 
         {/* Right side: Material Display */}
@@ -851,7 +909,7 @@ export default function Study() {
             {isContentLoading ? (
               <p>読み込み中...</p>
             ) : selectedMaterial?.type === 'image' && selectedMaterial.downloadURL ? (
-              <img src={preloadedImages[selectedMaterial.id] || selectedMaterial.downloadURL} alt={selectedMaterial.name} style={{ width: '100%', height: '100%', borderRadius: '8px', margin: 'auto' }} />
+              <img src={preloadedImages[selectedMaterial.id] || selectedMaterial.downloadURL} alt={selectedMaterial.name} style={{ width: '100%', height: '100%', borderRadius: '8px', objectFit: 'contain' }} />
             ) : selectedMaterial?.type === 'text' ? (
               <pre style={{ fontSize: '16px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
                 {textContent}
@@ -888,6 +946,183 @@ export default function Study() {
       >
         {statusMessage}
       </div>
+
+      {/* --- 履歴グラフ --- */}
+      <div style={{
+        position: 'fixed',
+        left: '38%',
+        bottom: '20px',
+        transform: 'translateX(-50%)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px',
+        zIndex: 9998,
+        pointerEvents: 'none',
+        transition: 'opacity 0.3s ease',
+        opacity: statusHistory.length > 0 ? 1 : 0,
+        background: 'linear-gradient(135deg, rgba(0,0,0,0.6), rgba(0,0,0,0.3))',
+        border: '1px solid rgba(255,255,255,0.2)',
+        borderRadius: '16px',
+        backdropFilter: 'blur(8px)',
+        padding: '10px 16px',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+      }}>
+        <div style={{
+          color: '#FFFFFF',
+          fontSize: '14px',
+          fontWeight: '600',
+          textShadow: '0 1px 2px rgba(0,0,0,0.5)'
+        }}>
+          📈 集中度
+        </div>
+        <div style={{
+          color: '#FFFFFF',
+          fontSize: '10px', 
+          writingMode: 'vertical-rl',
+          textOrientation: 'mixed',
+          letterSpacing: '1px',
+          borderLeft: '1px solid rgba(255,255,255,0.3)',
+          paddingLeft: '8px',
+          height: '80px',
+          display: 'flex',
+          alignItems: 'center',
+          opacity: 0.7
+        }}>
+          低
+        </div>
+        <svg width={chartWidth} height={chartHeight + 30} style={{ overflow: 'visible' }}>
+          <defs>
+            <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" style={{stopColor: '#60a5fa', stopOpacity: 0.8}} />
+              <stop offset="50%" style={{stopColor: '#34d399', stopOpacity: 1}} />
+              <stop offset="100%" style={{stopColor: '#fbbf24', stopOpacity: 0.8}} />
+            </linearGradient>
+            <filter id="glow">
+              <feGaussianBlur stdDeviation="1" result="coloredBlur"/>
+              <feMerge> 
+                <feMergeNode in="coloredBlur"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+            <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="rgba(255,255,255,0.6)" />
+            </marker>
+          </defs>
+          
+          {/* 時系列矢印 */}
+          <line
+            x1={chartPadding}
+            y1={chartHeight + 15}
+            x2={chartWidth - chartPadding - 10}
+            y2={chartHeight + 15}
+            stroke="rgba(255,255,255,0.4)"
+            strokeWidth="2"
+            markerEnd="url(#arrowhead)"
+          />
+          <text
+            x={chartPadding}
+            y={chartHeight + 12}
+            fill="rgba(255,255,255,0.6)"
+            fontSize="9"
+            fontWeight="500"
+          >
+            過去
+          </text>
+          <text
+            x={chartWidth - chartPadding - 5}
+            y={chartHeight + 12}
+            fill="rgba(255,255,255,0.6)"
+            fontSize="9"
+            fontWeight="500"
+            textAnchor="end"
+          >
+            現在
+          </text>
+          
+          {/* 背景グリッド */}
+          {[0.2, 0.4, 0.6, 0.8].map((ratio, index) => (
+            <line
+              key={index}
+              x1={chartPadding}
+              y1={chartHeight - chartPadding - (ratio * (chartHeight - 2 * chartPadding))}
+              x2={chartWidth - chartPadding}
+              y2={chartHeight - chartPadding - (ratio * (chartHeight - 2 * chartPadding))}
+              stroke="rgba(255,255,255,0.08)"
+              strokeWidth="1"
+              strokeDasharray="2,2"
+            />
+          ))}
+          
+          <polyline
+              fill="none"
+              stroke="url(#lineGradient)"
+              strokeWidth="3"
+              points={points}
+              style={{ 
+                transition: 'all 0.3s ease',
+                filter: 'url(#glow)'
+              }}
+          />
+          {statusHistory.map((status, index) => {
+              const x = chartPadding + (index / (statusHistory.length > 1 ? statusHistory.length - 1 : 1)) * (chartWidth - 2 * chartPadding);
+              const y = chartHeight - chartPadding - (getStatusValue(status) * (chartHeight - 2 * chartPadding));
+              const isLatest = index === statusHistory.length - 1;
+              
+              return (
+                <g key={index}>
+                  <circle 
+                    cx={x} 
+                    cy={y} 
+                    r="5" 
+                    fill={getStatusColor(status)} 
+                    opacity="0.3"
+                    style={{ transition: 'all 0.3s ease' }}
+                  />
+                  <circle 
+                    cx={x} 
+                    cy={y} 
+                    r="3" 
+                    fill={getStatusColor(status)} 
+                    stroke="#FFFFFF"
+                    strokeWidth={isLatest ? "2" : "1"}
+                    style={{ 
+                      transition: 'all 0.3s ease',
+                      filter: 'url(#glow)'
+                    }}
+                  />
+                  {/* 最新ポイントにマーク */}
+                  {isLatest && (
+                    <text
+                      x={x}
+                      y={y - 8}
+                      textAnchor="middle"
+                      fill="rgba(255,255,255,0.8)"
+                      fontSize="8"
+                    >
+                      ●
+                    </text>
+                  )}
+                </g>
+              );
+          })}
+        </svg>
+        <div style={{
+          color: '#FFFFFF',
+          fontSize: '10px', 
+          writingMode: 'vertical-rl',
+          textOrientation: 'mixed',
+          letterSpacing: '1px',
+          borderRight: '1px solid rgba(255,255,255,0.3)',
+          paddingRight: '8px',
+          height: '80px',
+          display: 'flex',
+          alignItems: 'center',
+          opacity: 0.7
+        }}>
+          高
+        </div>
+      </div>
+
 
       {/* 右上のボタン */}
       <div style={{ position: 'absolute', top: '20px', right: '20px', zIndex: 20, display: 'flex', gap: '12px' }}>
@@ -1020,5 +1255,5 @@ export default function Study() {
       `}</style>
     </div>
   )
-
 }
+
