@@ -3,6 +3,7 @@ import { Canvas, useFrame } from '@react-three/fiber'
 import { useGLTF } from '@react-three/drei'
 import * as THREE from 'three'
 import { OPTIMAL_CAMERA_POSITION } from '../constants/cameraPositions'
+import Material3D from './Material3D'
 
 function AnimatedModel() {
   const { scene, animations } = useGLTF('/udemy_test2.glb')
@@ -30,11 +31,13 @@ function AnimatedModel() {
   return <primitive object={scene} />
 }
 
+
 interface StudyAnimationProps {
   className?: string
+  selectedMaterial?: any
 }
 
-export default function StudyAnimation({ className }: StudyAnimationProps) {
+export default function StudyAnimation({ className, selectedMaterial }: StudyAnimationProps) {
   return (
     <div className={className} style={{ width: '100%', height: '100vh' }}>
       <Canvas 
@@ -59,6 +62,9 @@ export default function StudyAnimation({ className }: StudyAnimationProps) {
         <pointLight position={[-10, -10, -5]} intensity={0.5} />
         
         <AnimatedModel />
+        
+        {/* 3D教材表示 */}
+        <Material3D selectedMaterial={selectedMaterial} />
         
         {/* グリッドヘルパー */}
         <gridHelper args={[20, 20]} />
