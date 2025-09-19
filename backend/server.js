@@ -25,6 +25,10 @@ app.use(cors({
     // originがundefined（同一オリジン）または許可リストに含まれる場合は許可
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
+    } 
+    // Vercelのプレビューデプロイメントパターンも許可
+    else if (origin && origin.includes('yudais-projects-833f764f.vercel.app')) {
+      callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
     }
