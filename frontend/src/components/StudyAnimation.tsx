@@ -3,6 +3,7 @@ import { Canvas, useFrame } from '@react-three/fiber'
 import { useGLTF, Text, Plane, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import { useRef, useEffect } from 'react'
+import modelUrl from '../assets/udemy_test2.glb?url'
 
 const OPTIMAL_CAMERA_POSITION = {
   position: new THREE.Vector3(0, 3.5, 8.3),
@@ -14,7 +15,7 @@ const OPTIMAL_CAMERA_POSITION = {
  * 3Dモデルを読み込み、"Study"アニメーションを再生するコンポーネント
  */
 function AnimatedModel() {
-  const { scene, animations } = useGLTF('/udemy_test2.glb');
+  const { scene, animations } = useGLTF(modelUrl);
   const mixer = useRef<THREE.AnimationMixer | null>(null);
 
   useEffect(() => {
