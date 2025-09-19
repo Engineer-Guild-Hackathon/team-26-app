@@ -49,7 +49,6 @@ const firebaseTestRoutes = require('./routes/firebase-test');
 app.use('/api/study', studyRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/user', userRoutes);
-app.use('/api/materials', materialsRoutes);
 app.use('/session', sessionRoutes);
 app.use('/api/firebase-materials', firebaseMaterialsRoutes);
 app.use('/api/firebase-test', firebaseTestRoutes);
@@ -63,7 +62,7 @@ app.get("/", (req, res) => {
       "/api/study/*",
       "/api/ai/*", 
       "/api/user/*",
-      "/api/materials/*"
+      "/api/firebase-materials/*"
     ]
   });
 });
