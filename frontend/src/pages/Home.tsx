@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import TalkAnimation from '../components/TalkAnimation'
+import TalkAnimation from 'src/components/TalkAnimation'
 
 // ダミーデータ
 const dummyWeeklyData = [2, 3, 1, 4, 2, 5, 6] // 1週間の学習時間（時間）
@@ -25,14 +25,14 @@ const characterMessages = [
 
 // アイコンコンポーネント
 const StudyIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
     <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
   </svg>
 )
 
 const StatsIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M18 20V10"/>
     <path d="M12 20V4"/>
     <path d="M6 20v-6"/>
@@ -40,7 +40,7 @@ const StatsIcon = () => (
 )
 
 const TargetIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="10"/>
     <circle cx="12" cy="12" r="6"/>
     <circle cx="12" cy="12" r="2"/>
@@ -48,7 +48,9 @@ const TargetIcon = () => (
 )
 
 const MaterialsIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
     <polyline points="14,2 14,8 20,8"/>
     <line x1="16" y1="13" x2="8" y2="13"/>
@@ -78,69 +80,81 @@ export default function Home() {
       width: '100vw', 
       height: '100vh', 
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      overflow: 'hidden'
+      overflow: 'hidden' // ★ 親要素のスクロールを禁止
     }}>
-      {/* グラスモーフィズム背景 */}
-      <div style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
+      {/* ★ スクロールとグラスモーフィズム効果を持つコンテナ */}
+      <div className="custom-scrollbar" style={{
+        width: '100%',
+        height: '100%',
+        overflowY: 'auto',
         background: 'rgba(255, 255, 255, 0.1)',
         backdropFilter: 'blur(10px)',
       }}>
-        {/* コンテナ */}
+        <style>{`
+          .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+          }
+          .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.1);
+          }
+          .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+          }
+          .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.5);
+          }
+        `}</style>
+        
+        {/* コンテンツ全体のコンテナ */}
         <div style={{ 
           width: '100%', 
-          height: '100%', 
           padding: '32px', 
           boxSizing: 'border-box'
-    }}>
-      {/* ヘッダー */}
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center',
+        }}>
+          {/* ヘッダー */}
+          <div style={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center',
             marginBottom: '40px'
           }}>
             <div>
               <h1 style={{ 
                 margin: 0, 
                 color: 'white',
-                fontSize: '2.5rem',
+                fontSize: '3.0rem',
                 fontWeight: '700',
                 textShadow: '0 2px 4px rgba(0,0,0,0.3)'
               }}>
-                ✨ Study Dashboard
+                Share Motti
               </h1>
               <p style={{
                 margin: '8px 0 0 0',
                 color: 'rgba(255,255,255,0.8)',
                 fontSize: '1.1rem'
               }}>
-                今週も頑張ろう！📚
               </p>
             </div>
             <div style={{ display: 'flex', gap: '16px' }}>
-          <button 
-            style={{
+              <button 
+                style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',
                   padding: '12px 24px',
                   background: 'rgba(255,255,255,0.2)',
-              color: 'white',
+                  color: 'white',
                   border: '1px solid rgba(255,255,255,0.3)',
                   borderRadius: '16px',
-              cursor: 'pointer',
+                  cursor: 'pointer',
                   fontSize: '16px',
                   fontWeight: '600',
                   backdropFilter: 'blur(10px)',
                   transition: 'all 0.3s ease',
                   boxShadow: '0 4px 16px rgba(0,0,0,0.1)'
-            }}
-            onClick={() => navigate('/study-settings')}
+                }}
+                onClick={() => navigate('/study-settings')}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = 'rgba(255,255,255,0.3)'
                   e.currentTarget.style.transform = 'translateY(-2px)'
@@ -152,9 +166,39 @@ export default function Home() {
               >
                 <StudyIcon />
                 勉強開始
-          </button>
-          <button 
-            style={{
+              </button>
+              <button 
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '12px 24px',
+                  background: 'rgba(255,255,255,0.2)',
+                  color: 'white',
+                  border: '1px solid rgba(255,255,255,0.3)',
+                  borderRadius: '16px',
+                  cursor: 'pointer',
+                  fontSize: '16px',
+                  fontWeight: '600',
+                  backdropFilter: 'blur(10px)',
+                  transition: 'all 0.3s ease',
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.1)'
+                }}
+                onClick={() => navigate('/materials')}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.3)'
+                  e.currentTarget.style.transform = 'translateY(-2px)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.2)'
+                  e.currentTarget.style.transform = 'translateY(0)'
+                }}
+              >
+                <MaterialsIcon />
+                教材管理
+              </button>
+              {/* <button 
+                style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',
@@ -193,7 +237,7 @@ export default function Home() {
                   color: 'rgba(255,255,255,0.9)',
                   border: '1px solid rgba(255,255,255,0.2)',
                   borderRadius: '16px',
-              cursor: 'pointer',
+                  cursor: 'pointer',
                   fontSize: '16px',
                   fontWeight: '600',
                   backdropFilter: 'blur(10px)',
@@ -207,25 +251,24 @@ export default function Home() {
                 }}
               >
                 ⚙️ 設定
-          </button>
-        </div>
-      </div>
+              </button> */}
+            </div>
+          </div>
 
-      {/* メインコンテンツ */}
-      <div style={{ 
-        display: 'grid', 
+          {/* メインコンテンツ */}
+          <div style={{ 
+            display: 'grid', 
             gridTemplateColumns: '1fr 1fr 1fr', 
-            gridTemplateRows: '1fr 1fr',
+            gridTemplateRows: 'auto auto',
             gap: '24px',
-            height: 'calc(100vh - 180px)'
           }}>
             {/* 学習記録 - 2列にまたがる */}
-        <div style={{
+            <div style={{
               gridColumn: '1 / 3',
               background: 'rgba(255, 255, 255, 0.15)',
               backdropFilter: 'blur(20px)',
               borderRadius: '24px',
-          padding: '24px',
+              padding: '24px',
               border: '1px solid rgba(255, 255, 255, 0.2)',
               boxShadow: '0 8px 32px rgba(0,0,0,0.1)'
             }}>
@@ -236,27 +279,25 @@ export default function Home() {
                 </h2>
               </div>
               
-              {/* 棒グラフ（コンパクト版） */}
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'end', 
-            justifyContent: 'space-around',
+              {/* 棒グラフ */}
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'end', 
+                justifyContent: 'space-around',
                 height: '160px',
-            marginBottom: '20px',
+                marginBottom: '20px',
                 padding: '16px',
                 background: 'rgba(255, 255, 255, 0.05)',
                 borderRadius: '16px',
                 border: '1px solid rgba(255, 255, 255, 0.1)'
-          }}>
-            {dummyWeeklyData.map((hours, index) => (
+              }}>
+                {dummyWeeklyData.map((hours, index) => (
                   <div key={index} style={{ textAlign: 'center', position: 'relative' }}>
-                <div 
-                  style={{
+                    <div 
+                      style={{
                         width: '48px',
                         height: `${Math.max(hours * 20, 8)}px`,
-                        background: `linear-gradient(135deg, 
-                          hsl(${180 + index * 25}, 70%, 60%) 0%, 
-                          hsl(${180 + index * 25}, 80%, 45%) 100%)`,
+                        background: `linear-gradient(135deg, hsl(${180 + index * 25}, 70%, 60%) 0%, hsl(${180 + index * 25}, 80%, 45%) 100%)`,
                         borderRadius: '8px 8px 4px 4px',
                         marginBottom: '12px',
                         boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
@@ -290,11 +331,11 @@ export default function Home() {
                       fontSize: '14px',
                       fontWeight: '500' 
                     }}>
-                  {['月', '火', '水', '木', '金', '土', '日'][index]}
-                </div>
+                      {['月', '火', '水', '木', '金', '土', '日'][index]}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
 
               <div style={{ 
                 display: 'flex', 
@@ -313,17 +354,17 @@ export default function Home() {
                     📈 平均: {(totalWeeklyHours / 7).toFixed(1)}時間/日
                   </p>
                 </div>
-          <div style={{ 
+                <div style={{ 
                   fontSize: '3rem',
                   filter: 'drop-shadow(0 0 10px rgba(255,215,0,0.5))'
                 }}>
                   {totalWeeklyHours >= 20 ? '🏆' : totalWeeklyHours >= 10 ? '⭐' : '📚'}
                 </div>
-          </div>
-        </div>
+              </div>
+            </div>
 
             {/* 学習分野 - 右上 */}
-        <div style={{
+            <div style={{
               background: 'rgba(255, 255, 255, 0.15)',
               backdropFilter: 'blur(20px)',
               borderRadius: '24px',
@@ -338,22 +379,22 @@ export default function Home() {
                   </h3>
                 </div>
                 
-                {/* 円グラフ（モダン版） */}
-          <div style={{ 
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
+                {/* 円グラフ */}
+                <div style={{ 
+                  display: 'flex',
+                  justifyContent: 'center',
+                  alignItems: 'center',
                   marginBottom: '20px'
-          }}>
-            <div style={{
+                }}>
+                  <div style={{
                     width: '100px',
                     height: '100px',
-              borderRadius: '50%',
-              background: `conic-gradient(
+                    borderRadius: '50%',
+                    background: `conic-gradient(
                       #ff6b9d 0% ${dummyStudyContent.math}%,
-                #4ecdc4 ${dummyStudyContent.math}% ${dummyStudyContent.math + dummyStudyContent.english}%,
-                #45b7d1 ${dummyStudyContent.math + dummyStudyContent.english}% ${dummyStudyContent.math + dummyStudyContent.english + dummyStudyContent.science}%,
-                #96ceb4 ${dummyStudyContent.math + dummyStudyContent.english + dummyStudyContent.science}% 100%
+                      #4ecdc4 ${dummyStudyContent.math}% ${dummyStudyContent.math + dummyStudyContent.english}%,
+                      #45b7d1 ${dummyStudyContent.math + dummyStudyContent.english}% ${dummyStudyContent.math + dummyStudyContent.english + dummyStudyContent.science}%,
+                      #96ceb4 ${dummyStudyContent.math + dummyStudyContent.english + dummyStudyContent.science}% 100%
                     )`,
                     boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
                     position: 'relative'
@@ -375,19 +416,19 @@ export default function Home() {
                       🎯
                     </div>
                   </div>
-          </div>
+                </div>
 
-          {/* 凡例 */}
+                {/* 凡例 */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {[
                     { label: '📐 数学', color: '#ff6b9d', value: dummyStudyContent.math, emoji: '📊' },
                     { label: '🗣️ 英語', color: '#4ecdc4', value: dummyStudyContent.english, emoji: '💬' },
                     { label: '🔬 理科', color: '#45b7d1', value: dummyStudyContent.science, emoji: '⚗️' },
                     { label: '📚 その他', color: '#96ceb4', value: dummyStudyContent.other, emoji: '✨' }
-            ].map((item, index) => (
-              <div key={index} style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
+                  ].map((item, index) => (
+                    <div key={index} style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
                       justifyContent: 'space-between',
                       background: 'rgba(255, 255, 255, 0.1)',
                       padding: '8px 12px',
@@ -526,3 +567,4 @@ export default function Home() {
     </div>
   )
 }
+

@@ -38,19 +38,6 @@ export default function Material3D({ selectedMaterial, position = [1.5, 1.2, 1.0
           <planeGeometry args={[2.1, 1.6]} />
           <meshBasicMaterial color="#ffffff" transparent opacity={0.8} />
         </mesh>
-        
-        {/* タイトル表示 */}
-        <Text
-          position={[0, -1, 0]}
-          fontSize={0.15}
-          color="white"
-          anchorX="center"
-          anchorY="middle"
-          outlineWidth={0.02}
-          outlineColor="black"
-        >
-          🖼️ {selectedMaterial.name}
-        </Text>
       </group>
     )
   }
@@ -82,19 +69,7 @@ export default function Material3D({ selectedMaterial, position = [1.5, 1.2, 1.0
         >
           {selectedMaterial.content?.substring(0, 100) + (selectedMaterial.content?.length > 100 ? '...' : '')}
         </Text>
-        
-        {/* ファイル名表示 */}
-        <Text
-          position={[0, -1, 0]}
-          fontSize={0.12}
-          color="white"
-          anchorX="center"
-          anchorY="middle"
-          outlineWidth={0.02}
-          outlineColor="black"
-        >
-          {selectedMaterial.name}
-        </Text>
+
       </group>
     )
   }

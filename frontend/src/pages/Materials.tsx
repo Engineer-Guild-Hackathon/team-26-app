@@ -5,9 +5,11 @@ import FileExplorer from '../components/FileExplorer'
 
 // アイコンコンポーネント
 const BackIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <path d="m12 19-7-7 7-7"/>
-    <path d="M19 12H5"/>
+
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="5">
+    <path d="m9 19-7-7 7-7"/>
+    <path d="M28 12H5"/>
+
   </svg>
 )
 
@@ -22,16 +24,6 @@ const UploadIcon = () => (
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
     <polyline points="7,10 12,15 17,10"/>
     <line x1="12" y1="15" x2="12" y2="3"/>
-  </svg>
-)
-
-const FileTextIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-    <polyline points="14,2 14,8 20,8"/>
-    <line x1="16" y1="13" x2="8" y2="13"/>
-    <line x1="16" y1="17" x2="8" y2="17"/>
-    <polyline points="10,9 9,9 8,9"/>
   </svg>
 )
 
@@ -55,6 +47,13 @@ export default function Materials() {
   const [newFolderName, setNewFolderName] = useState('')
   const [createFolderParentId, setCreateFolderParentId] = useState<string | null>(null)
   
+
+  // ファイル表示オーバーレイ関連
+  const [showFileOverlay, setShowFileOverlay] = useState(false)
+  const [overlayFile, setOverlayFile] = useState<MaterialFile | null>(null)
+  const [overlayContent, setOverlayContent] = useState<string>('')
+  const [isLoadingOverlay, setIsLoadingOverlay] = useState(false)
+
   // ファイル管理
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [selectedFolder, setSelectedFolder] = useState<string>('')
@@ -67,7 +66,9 @@ export default function Materials() {
   // 初期化
   useEffect(() => {
     fetchAllFolders()
-    fetchFiles(null) // ルートフォルダのファイル
+
+    fetchFiles(undefined) // ルートフォルダのファイル
+
   }, [])
 
   // 全フォルダ取得（階層表示用）
@@ -113,7 +114,8 @@ export default function Materials() {
   }
 
   // ファイル一覧取得
-  const fetchFiles = async (folderId: string | null) => {
+  const fetchFiles = async (folderId: string | null | undefined) => {
+
     if (!folderId) {
       setFiles([])
       return
@@ -136,7 +138,8 @@ export default function Materials() {
       setLoading(true)
       const newFolder = await firebaseMaterialsService.createFolder(
         newFolderName.trim(), 
-        createFolderParentId
+        createFolderParentId || undefined
+
       )
       
       // リアルタイムでフォルダ追加
@@ -169,7 +172,7 @@ export default function Materials() {
       // 現在のフォルダが削除された場合はルートに戻る
       if (currentFolder?.id === folder.id) {
         setCurrentFolder(null)
-        fetchFiles(null)
+        fetchFiles(undefined)
       }
       
       alert('フォルダを削除しました')
@@ -229,7 +232,8 @@ export default function Materials() {
     try {
       setLoading(true)
       await firebaseMaterialsService.deleteFile(file.id)
-      fetchFiles(currentFolder?.id || null)
+      fetchFiles(currentFolder?.id || undefined)
+
     } catch (error) {
       console.error('ファイル削除エラー:', error)
       alert('ファイル削除に失敗しました')
@@ -245,23 +249,29 @@ export default function Materials() {
     fetchFiles(folder.id)
   }
 
-  // ファイルクリック（選択）
-  const handleFileClick = (file: MaterialFile) => {
-    console.log('ファイル選択:', file)
-    alert(`「${file.name}」を選択しました`)
-  }
 
-  // 親フォルダに戻る
-  const handleNavigateToParent = () => {
-    if (currentFolder) {
-      const parentFolder = allFolders.find(f => f.id === currentFolder.parentId)
-      if (parentFolder) {
-        handleFolderClick(parentFolder)
+  // ファイルクリック（オーバーレイ表示）
+  const handleFileClick = async (file: MaterialFile) => {
+    console.log('ファイルクリック:', file)
+    setOverlayFile(file)
+    setShowFileOverlay(true)
+    setIsLoadingOverlay(true)
+    
+    try {
+      if (file.type === 'text') {
+        const content = await firebaseMaterialsService.getTextContent(file.id)
+        setOverlayContent(content)
       } else {
-        handleNavigateToRoot()
+        setOverlayContent('') // 画像の場合は内容なし
       }
+    } catch (error) {
+      console.error('ファイル内容取得エラー:', error)
+      setOverlayContent('ファイル内容の取得に失敗しました。')
+    } finally {
+      setIsLoadingOverlay(false)
     }
   }
+
 
   // ルートに戻る
   const handleNavigateToRoot = () => {
@@ -385,7 +395,6 @@ export default function Materials() {
                 onFolderClick={handleFolderClick}
                 onFileClick={handleFileClick}
                 onFileDelete={deleteFile}
-                onNavigateToParent={handleNavigateToParent}
                 onNavigateToRoot={handleNavigateToRoot}
                 onFolderSelect={handleFolderSelect}
               />
@@ -608,7 +617,10 @@ export default function Materials() {
                             fontSize: '12px',
                             color: 'white',
                             backdropFilter: 'blur(10px)',
-                            outline: 'none'
+                            outline: 'none',
+                            boxSizing: 'border-box',
+                            maxWidth: '100%'
+
                           }}
                         />
                         <button
@@ -773,6 +785,169 @@ export default function Materials() {
           </div>
         </div>
       </div>
+
+
+      {/* ファイル内容表示オーバーレイ */}
+      {showFileOverlay && overlayFile && (
+        <div style={{
+          position: 'fixed',
+          top: '0',
+          left: '0',
+          right: '0',
+          bottom: '0',
+          background: 'rgba(0, 0, 0, 0.8)',
+          backdropFilter: 'blur(12px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 2000,
+          padding: '40px'
+        }}>
+          <div style={{
+            background: 'rgba(255, 255, 255, 0.15)',
+            backdropFilter: 'blur(20px)',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            borderRadius: '24px',
+            width: '90%',
+            maxWidth: '900px',
+            maxHeight: '85%',
+            overflow: 'hidden',
+            boxShadow: '0 25px 50px rgba(0, 0, 0, 0.3)',
+            display: 'flex',
+            flexDirection: 'column'
+          }}>
+            {/* ヘッダー */}
+            <div style={{
+              padding: '24px 32px',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexShrink: 0
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ fontSize: '24px' }}>
+                  {overlayFile.type === 'text' ? '📄' : '🖼️'}
+                </span>
+                <h3 style={{ 
+                  margin: '0', 
+                  fontSize: '1.5rem', 
+                  fontWeight: '600',
+                  color: 'white',
+                  textShadow: '0 2px 4px rgba(0,0,0,0.3)'
+                }}>
+                  {overlayFile.name}
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowFileOverlay(false)}
+                style={{
+                  background: 'rgba(239, 68, 68, 0.8)',
+                  border: 'none',
+                  borderRadius: '12px',
+                  color: 'white',
+                  cursor: 'pointer',
+                  padding: '12px 16px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  transition: 'all 0.3s ease',
+                  backdropFilter: 'blur(10px)'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(239, 68, 68, 1)'
+                  e.currentTarget.style.transform = 'translateY(-2px)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(239, 68, 68, 0.8)'
+                  e.currentTarget.style.transform = 'translateY(0)'
+                }}
+              >
+                ✕ 閉じる
+              </button>
+            </div>
+
+            {/* コンテンツ */}
+            <div style={{
+              padding: '32px',
+              flex: 1,
+              overflow: 'auto',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              {isLoadingOverlay ? (
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '16px',
+                  color: 'white',
+                  fontSize: '18px'
+                }}>
+                  <div style={{
+                    width: '24px',
+                    height: '24px',
+                    border: '3px solid rgba(255, 255, 255, 0.3)',
+                    borderTop: '3px solid white',
+                    borderRadius: '50%',
+                    animation: 'spin 1s linear infinite'
+                  }}></div>
+                  読み込み中...
+                </div>
+              ) : overlayFile.type === 'image' && overlayFile.downloadURL ? (
+                <img 
+                  src={overlayFile.downloadURL} 
+                  alt={overlayFile.name}
+                  style={{ 
+                    maxWidth: '100%', 
+                    maxHeight: '100%', 
+                    objectFit: 'contain',
+                    borderRadius: '12px',
+                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
+                  }} 
+                />
+              ) : overlayFile.type === 'text' ? (
+                <div style={{
+                  width: '100%',
+                  height: '100%',
+                  background: 'rgba(0, 0, 0, 0.4)',
+                  borderRadius: '16px',
+                  padding: '24px',
+                  overflow: 'auto'
+                }}>
+                  <pre style={{ 
+                    fontSize: '16px', 
+                    whiteSpace: 'pre-wrap', 
+                    wordBreak: 'break-word', 
+                    margin: '0',
+                    color: 'white',
+                    fontFamily: 'monospace',
+                    lineHeight: '1.6'
+                  }}>
+                    {overlayContent}
+                  </pre>
+                </div>
+              ) : (
+                <div style={{
+                  textAlign: 'center',
+                  color: 'rgba(255, 255, 255, 0.7)',
+                  fontSize: '18px'
+                }}>
+                  <div style={{ fontSize: '64px', marginBottom: '16px', opacity: 0.6 }}>📄</div>
+                  <p>このファイルは表示できません</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
+
     </div>
   )
 }

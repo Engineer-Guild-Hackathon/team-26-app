@@ -285,13 +285,16 @@ export default function FileExplorer({
               {files.map((file) => (
                 <div
                   key={file.id}
+                  onClick={() => onFileClick(file)}
                   style={{
                     padding: '16px 20px',
                     background: 'rgba(255, 255, 255, 0.08)',
                     border: '1px solid rgba(255, 255, 255, 0.15)',
                     borderRadius: '12px',
                     transition: 'all 0.3s ease',
-                    backdropFilter: 'blur(10px)'
+                    backdropFilter: 'blur(10px)',
+                    cursor: 'pointer'
+
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.background = 'rgba(255, 255, 255, 0.15)'
@@ -314,7 +317,10 @@ export default function FileExplorer({
                     <div style={{ display: 'flex', gap: '8px' }}>
                       {file.type === 'text' && (
                         <button
-                          onClick={() => startEditingFile(file)}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            startEditingFile(file)
+                          }}
                           style={{
                             padding: '6px 12px',
                             fontSize: '12px',
@@ -340,32 +346,10 @@ export default function FileExplorer({
                         </button>
                       )}
                       <button
-                        onClick={() => onFileClick(file)}
-                        style={{
-                          padding: '6px 12px',
-                          fontSize: '12px',
-                          background: 'rgba(16, 185, 129, 0.8)',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '8px',
-                          cursor: 'pointer',
-                          fontWeight: '600',
-                          transition: 'all 0.3s ease',
-                          backdropFilter: 'blur(10px)'
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onFileDelete(file)
                         }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = 'rgba(16, 185, 129, 1)'
-                          e.currentTarget.style.transform = 'translateY(-1px)'
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = 'rgba(16, 185, 129, 0.8)'
-                          e.currentTarget.style.transform = 'translateY(0)'
-                        }}
-                      >
-                        選択
-                      </button>
-                      <button
-                        onClick={() => onFileDelete(file)}
                         style={{
                           padding: '6px 12px',
                           fontSize: '12px',
