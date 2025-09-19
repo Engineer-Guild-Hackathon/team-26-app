@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { useLoader } from '@react-three/fiber'
 import { Text } from '@react-three/drei'
 import * as THREE from 'three'
 
