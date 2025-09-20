@@ -152,7 +152,7 @@ class WebRTCRealtimeClient {
           voice: "alloy",
           input_audio_format: "pcm16",
           output_audio_format: "pcm16",
-          instructions: `あなたは一緒に勉強している親しい友達です。Study with meで同じ分野を勉強している仲間として、タメ口で気軽に話しかけてください。
+          instructions: `あなたは一緒に勉強している親しい友達です。Study with meで同じ分野を勉強している仲間として、タメ口で気軽に話しかけてください
 
 会話の特徴：
 - タメ口で親しみやすく（「〜だよ」「〜じゃん」など）
@@ -161,7 +161,7 @@ class WebRTCRealtimeClient {
 - 短めの返答（1-2文程度）
 - 絵文字を適度に使用
 
-教材についてフランクに話し、学習者を励ましてください。`,
+学習者の進捗について聞き、学習者を励ましてください。`,
         },
       }
       this.dataChannel!.send(JSON.stringify(sessionUpdate))
@@ -223,6 +223,19 @@ class WebRTCRealtimeClient {
 
       case "conversation.item.input_audio_transcription.completed":
         console.log("User transcription:", data.transcript)
+        
+        // 空の音声認識は無視
+        if (!data.transcript || data.transcript.trim() === '') {
+          console.log('🚫 空の音声認識をスキップ')
+          return
+        }
+        
+        // AI応答中の音声認識は無視（重複エラー防止）
+        if (this.isResponseActive) {
+          console.log('🚫 AI応答中の音声認識をスキップ:', data.transcript)
+          return
+        }
+        
         this.onMessage({ 
           type: 'user_transcription', 
           message: `🎤 あなた: ${data.transcript}`,
@@ -420,7 +433,7 @@ class WebRTCRealtimeClient {
         content: [
           {
             type: "input_text",
-                text: `「${material.name}」について話そう！\n\n【内容】\n${content}`
+                text: `[meta: userが「${material.name}」の教材を送信]\n\n${content}`
               }
             ]
           }
@@ -437,7 +450,7 @@ class WebRTCRealtimeClient {
         content: [
           {
                 type: "input_text",
-                text: `「${material.name}」という画像について話そう！`
+                text: `[meta: userが「${material.name}」の画像教材を送信]`
               }
             ]
           }
