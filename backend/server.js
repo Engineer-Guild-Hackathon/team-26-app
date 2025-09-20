@@ -29,6 +29,10 @@ app.use(cors({
     // Vercelのプレビューデプロイメントパターンも許可
     else if (origin && origin.includes('yudais-projects-833f764f.vercel.app')) {
       callback(null, true);
+    }
+    // 本番Vercel URLも許可
+    else if (origin && origin.includes('team-26-app.vercel.app')) {
+      callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
     }
