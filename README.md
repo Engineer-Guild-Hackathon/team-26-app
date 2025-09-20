@@ -15,7 +15,7 @@
 ## デモ / プレゼン資料
 - **本番URL**: https://team-26-66jj8cdvj-yudais-projects-833f764f.vercel.app
 - **デモURL**: https://drive.google.com/file/d/1bDvsmAcU8bWn1Vx6sSTabqDH9EMf0thK/view?usp=sharing
-- **プレゼンURL**: [[https://www.canva.com/design/DAGylWv54Bk/u9Ipaei9nVqYx6lOM-eQ8w/edit?ui=eyJEIjp7IlAiOnsiQiI6ZmFsc2V9fX0](https://www.canva.com/design/DAGzYr2nugY/yMFTDxYQGhCRlRt-3ugeiQ/edit?ui=eyJIIjp7IkEiOnRydWV9fQ)](https://www.canva.com/design/DAGzYr2nugY/yMFTDxYQGhCRlRt-3ugeiQ/edit?ui=eyJIIjp7IkEiOnRydWV9fQ)
+- **プレゼンURL**: https://www.canva.com/design/DAGzYr2nugY/yMFTDxYQGhCRlRt-3ugeiQ/edit?ui=eyJIIjp7IkEiOnRydWV9fQ
 
 ---
 
